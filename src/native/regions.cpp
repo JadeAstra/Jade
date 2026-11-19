@@ -1194,15 +1194,42 @@ struct Region {
         return -1;
     }
 
-    // Written back at a way out: each slot below the top the region wrote, as what it holds.
-    // Copies and whole numbers first, which read slots the others may write.
+    // Written back at a way out: each slot below the top the region wrote, as what it holds, that
+    // the VM may read again from where it goes on (FunctionProto::slotLiveAt, 2026-11-19: a value
+    // never read again kept nowhere, its register free sooner). One the region wrote that is not is
+    // given null (nullslot), a constant, no register: the collector looks at every slot under the
+    // top, and its memory may hold what an older frame left there (a slot only native code wrote).
+    // Copies and whole numbers first, which read slots the others may write. With WW_CHECK_LIVE=1,
+    // each slot left so is given a value no instruction takes instead (poisonslot): where the VM
+    // reads one after all, the program fails.
     std::vector<LOp> stores(const State& st, uint32_t at, std::string& bad) const {
         // What cannot be written back is noted, not refused at once: a way the analysis finds
         // on its first time round may be one it does not keep (Region::analyse).
         auto refuse = [&](const std::string& why) { if (bad.empty()) bad = why; };
-        std::vector<LOp> first, rest;
+        static const bool poisoning = [] {
+            const char* asked = std::getenv("WW_CHECK_LIVE");
+            return asked != nullptr && std::string(asked) == "1";
+        }();
+        std::vector<LOp> first, rest, poisoned;
+        if (poisoning)
+            for (int slot = 1; slot < st.top; slot++)
+                if (!f.slotLiveAt(at, slot)) {
+                    LOp l;
+                    l.stem = "poisonslot";
+                    l.slot = slot;
+                    poisoned.push_back(l);
+                }
         for (const auto& [slot, k] : st.kinds) {
             if (slot >= st.top || k.bits == kEntry) continue;
+            if (!f.slotLiveAt(at, slot)) {
+                if (!poisoning) {
+                    LOp l;
+                    l.stem = "nullslot";
+                    l.slot = slot;
+                    rest.push_back(l);
+                }
+                continue;
+            }
             uint16_t w = static_cast<uint16_t>(k.bits & ~kEntry);
             // A copy of a slot as entered, beside a value the region made in that slot on another
             // way: of the variable's type either way, in the register either way, so written as
@@ -1247,6 +1274,7 @@ struct Region {
             }
         }
         first.insert(first.end(), rest.begin(), rest.end());
+        first.insert(first.end(), poisoned.begin(), poisoned.end());
         return first;
     }
 

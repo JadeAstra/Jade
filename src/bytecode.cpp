@@ -364,7 +364,7 @@ FunctionProto* Program::newProto() {
 // stack depth it runs at. With `partial` the function is still being compiled: jumps that
 // have no target yet are passed over, and the answer is the depth at which the code written
 // so far ends, or -1 if nothing reaches that point.
-static int analyzeStack(FunctionProto& f, const Program& program, bool partial, std::vector<int>* depths = nullptr) {
+static int analyzeStack(FunctionProto& f, const Program& program, bool partial, std::vector<int>* depths = nullptr, StackSteps* steps = nullptr) {
     auto fail = [&](const std::string& why) {
         throw std::runtime_error("invalid bytecode in " + f.name + ": " + why);
     };
@@ -404,7 +404,14 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
         endDepth = depth;
     };
 
+    size_t current = 0;  // the instruction being looked at, for `steps`
+    if (steps != nullptr) {
+        steps->pops.assign(n, 0);
+        steps->pushes.assign(n, 0);
+        steps->jumps.clear();
+    }
     auto flow = [&](int64_t target, int depth) {
+        if (steps != nullptr) steps->jumps.emplace_back(static_cast<uint32_t>(current), static_cast<uint32_t>(target));
         if (partial && target == 0) return;  // a forward jump that has not been given its target
         if (partial && static_cast<size_t>(target) == n) return reachEnd(depth);
         if (target < 0 || static_cast<size_t>(target) >= n) fail("jump out of range");
@@ -449,6 +456,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
 
             int pops = 0, pushes = 0;
             bool terminal = false;
+            current = ip;
 
             switch (op) {
                 case Op::Const:
@@ -1164,6 +1172,10 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
 
             // Slot 0 belongs to the frame and is never popped.
             if (depth - pops < 1) fail("stack underflow");
+            if (steps != nullptr) {
+                steps->pops[ip] = static_cast<uint16_t>(pops);
+                steps->pushes[ip] = static_cast<uint16_t>(pushes);
+            }
             depth = depth - pops + pushes;
             maxDepth = std::max(maxDepth, depth);
             if (terminal) break;
@@ -1233,15 +1245,16 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now, bool tru
     f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
     f.quickFewest = f.quickArity >= 0 ? f.requiredArgs() : 0;
     std::vector<int> depths;
+    StackSteps steps;
     // Code of ww's own making translated at its first call is checked then (translateNow):
     // a program's start reads many functions it never calls (a quarter of a kept program's
     // start went to checking them, 2026-11-09).
     const bool later = !now && !f.chooser && (bodyLater || !f.code.empty());
     f.unverified = trusted && later;
-    if (!f.unverified) analyzeStack(f, program, false, &depths);
+    if (!f.unverified) analyzeStack(f, program, false, &depths, later ? nullptr : &steps);
     if (!later) {
         f.untranslated = nullptr;
-        translate(f, depths);
+        translate(f, depths, f.unverified ? nullptr : &steps);
     } else {
         // Its run code made at its first call: a program's start reads the whole standard
         // library, and translating it all took 11 of its 14 ms (M9/M10).
@@ -1265,15 +1278,17 @@ void translateNow(FunctionProto& f) {
     // only in a loop.
     const bool once = f.name == "<script>" && f.source == "<std>";
     std::vector<int> depths;
-    // As verified, only the depths are wanted again; one read unverified is verified now.
+    StackSteps steps;
+    // As verified, only the depths (and what each instruction does to the stack) are wanted
+    // again; one read unverified is verified now.
     if (!once || f.unverified) {
         std::vector<int> found;
-        analyzeStack(f, *f.untranslated, false, &found);
+        analyzeStack(f, *f.untranslated, false, &found, &steps);
         if (!once) depths = std::move(found);
         f.unverified = false;
     }
     f.addressed.done.store(false, std::memory_order_relaxed);
-    translate(f, depths);
+    translate(f, depths, depths.empty() ? nullptr : &steps);
     f.untranslated = nullptr;
 }
 

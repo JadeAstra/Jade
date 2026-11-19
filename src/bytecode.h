@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -811,6 +812,28 @@ struct FunctionProto {
     // regions made); and the regions made, each way in where in `run` its instruction starts
     // (whose address in the code is then the VM's way into it) with its machine code.
     std::vector<std::pair<uint32_t, uint16_t>> runTops;
+    // Beside each of runTops (2026-11-19): the slots the VM may read again from there before
+    // writing them, `runLiveWords` words of bits each (slotsLive, registers.cpp), which a way out
+    // of native code writes back; empty where not worked out (every slot may be read). While
+    // translating, each one's stack code instruction and the locals the stack the translator
+    // holds there still names (runOrigins, then runLive).
+    std::vector<uint32_t> runOrigins;
+    std::vector<uint64_t> runLive;
+    uint8_t runLiveWords = 0;
+    // Whether slot `slot` may be read again from run code offset `at` (an instruction's start);
+    // true where that is not known.
+    bool slotLiveAt(uint32_t at, int slot) const {
+        if (runLiveWords == 0 || runLive.size() != runTops.size() * runLiveWords || slot < 0 || slot >= 64 * runLiveWords) return true;
+        auto it = std::lower_bound(runTops.begin(), runTops.end(), at, [](const std::pair<uint32_t, uint16_t>& t, uint32_t a) { return t.first < a; });
+        if (it == runTops.end() || it->first != at) return true;
+        bool live = false;
+        // Every entry starting there (an instruction joined of several): live where any has it.
+        for (; it != runTops.end() && it->first == at; ++it) {
+            const uint64_t word = runLive[static_cast<size_t>(it - runTops.begin()) * runLiveWords + static_cast<size_t>(slot) / 64];
+            live = live || ((word >> (slot % 64)) & 1) != 0;
+        }
+        return live;
+    }
     std::vector<uint32_t> nativeHeads;
     std::vector<uint8_t> nativeArrivals;
     // A whole function's region (2026-11-15): where it starts (just past its parameters'
@@ -980,9 +1003,19 @@ void loadDeferred(FunctionProto& f, VM* reader = nullptr);
 // nothing for one that has its body. Safe from any thread.
 void loadBody(FunctionProto& f);
 
+// What the verifier (analyzeStack) found of each instruction of a function's stack code, by
+// where it starts, besides the stack's depth before it: how many values it takes off the stack
+// and puts on, and where else than on to the next it goes (from, to). Kept for the slots a way
+// out of native code writes back (slotsLive, registers.cpp, 2026-11-19).
+struct StackSteps {
+    std::vector<uint16_t> pops, pushes;
+    std::vector<std::pair<uint32_t, uint32_t>> jumps;
+};
+
 // Makes the code the VM runs from `f`'s code, given the stack's depth before each of its
-// instructions (-1 where none is reached): registers.cpp (M6.7).
-void translate(FunctionProto& f, const std::vector<int>& depths);
+// instructions (-1 where none is reached): registers.cpp (M6.7). With `steps`, what slots may be
+// read again from each instruction is worked out too, for native code (FunctionProto::runLive).
+void translate(FunctionProto& f, const std::vector<int>& depths, const StackSteps* steps = nullptr);
 // The bytes before each opcode of the code the VM runs, which hold where its code is (D160).
 // (Each instruction starting at a multiple of them, so that they never span two cache lines,
 // was measured 1% to 4% slower: the code is larger, and each instruction rounds its end up.)

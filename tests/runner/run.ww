@@ -13,7 +13,9 @@
 //   --setting <name>      a stress setting for the programs tested: copy-reads, thread-stress,
 //                         native-results or gc-stress; interpret, the VM alone with no native
 //                         code (M9.5); or background, native code made on another core as
-//                         programs make it (made in place otherwise) (none)
+//                         programs make it (made in place otherwise); or check-live, each slot a
+//                         way out of native code leaves unwritten given a value no instruction
+//                         takes (none)
 //   --stress              the suite, then once more under each stress setting, one way
 //   --time-limit <s>      seconds a run may take (120; 600 under gc-stress; 2400 for that with the
 //                         sanitizer's build)

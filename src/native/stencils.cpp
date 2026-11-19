@@ -1892,6 +1892,19 @@ STENCIL(storeb) {
     storeSlotAt(base, kKindBool, i9 != 0);
     NEXT;
 }
+// A slot the VM never reads again, at a way out, given a value no instruction takes (an
+// undefined, as an unset global is: one holding an object is a lazy value's, which the collector
+// follows): WW_CHECK_LIVE's check of what Region::stores leaves out.
+// A slot the region wrote and the VM never reads again, at a way out: null, so that the collector,
+// which looks at every slot under the top, finds no word an older frame left there.
+STENCIL(nullslot) {
+    storeSlotAt(base, kKindNull, 0);
+    NEXT;
+}
+STENCIL(poisonslot) {
+    storeSlotAt(base, kKindUndefined, 0);
+    NEXT;
+}
 STENCIL(copyslot) {
     __builtin_memcpy(&(*slotAt(base)), &(*slot2At(base)), sizeof(Slot));
     NEXT;

@@ -245,6 +245,9 @@ public:
 
     void translate() {
         f_.runTops.clear();
+        f_.runOrigins.clear();
+        f_.runLive.clear();
+        f_.runLiveWords = static_cast<uint8_t>((std::max(f_.maxStack, 1) + 63) / 64);
         if (rs_ && f_.maxStack > 255) fail("more than 255 slots");
         findLeaders();
         findCaptured();
@@ -288,7 +291,16 @@ public:
             newAt_[at] = static_cast<uint32_t>(out_.size());
             // Where the VM's top is as this instruction's run code starts (where it is jumped to,
             // the stack's depth): kept for native code, which may go in at any instruction.
-            if (top_ >= 0 && top_ <= 0xFFFF) f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(top_));
+            if (top_ >= 0 && top_ <= 0xFFFF) {
+                f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(top_));
+                // And where in the stack code it is, with the locals the stack held here names
+                // still, which the run code read there reads (FunctionProto::runLive).
+                f_.runOrigins.push_back(static_cast<uint32_t>(at));
+                const size_t first = f_.runLive.size();
+                f_.runLive.resize(first + f_.runLiveWords, 0);
+                for (const Entry& e : stack_)
+                    if (e.kind == Entry::Local && e.index < 64 * f_.runLiveWords) f_.runLive[first + e.index / 64] |= uint64_t{1} << (e.index % 64);
+            }
             known = one(at, size, depth);
             // A function's result checked just after an instruction that gives one of that type
             // always (an int from AddI, whose operands the checker knew, D178): nothing to check.
@@ -1310,14 +1322,38 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     if (opBytes == kOpBytes && !f.runTops.empty()) {
         // Each where an instruction starts; one inside an instruction (a comparison the jump
         // after it was joined to) is dropped.
-        std::erase_if(f.runTops, [&](const auto& t) { return t.first >= moved.size() || moved[t.first] == UINT32_MAX; });
-        for (auto& [at, top] : f.runTops) at = where(at);
+        // (What each says of the stack code, runOrigins and runLive, kept beside it.)
+        const bool origins = f.runOrigins.size() == f.runTops.size() && f.runLive.size() == f.runTops.size() * f.runLiveWords;
+        const size_t words = f.runLiveWords;
+        size_t kept = 0;
+        for (size_t k = 0; k < f.runTops.size(); k++) {
+            const auto t = f.runTops[k];
+            if (t.first >= moved.size() || moved[t.first] == UINT32_MAX) continue;
+            f.runTops[kept] = {where(t.first), t.second};
+            if (origins) {
+                f.runOrigins[kept] = f.runOrigins[k];
+                for (size_t w = 0; w < words; w++) f.runLive[kept * words + w] = f.runLive[k * words + w];
+            }
+            kept++;
+        }
+        f.runTops.resize(kept);
+        if (origins) {
+            f.runOrigins.resize(kept);
+            f.runLive.resize(kept * words);
+        } else {
+            f.runOrigins.clear();
+            f.runLive.clear();
+        }
         loops = findNativeLoops != nullptr && findNativeLoops(f);
     }
     // Kept for the regions only where there are loops to make them of.
     if (!loops) {
         f.runTops.clear();
         f.runTops.shrink_to_fit();
+        f.runOrigins.clear();
+        f.runOrigins.shrink_to_fit();
+        f.runLive.clear();
+        f.runLive.shrink_to_fit();
     }
     if (writeRunAddresses != nullptr) writeRunAddresses(f);
 }
@@ -1412,7 +1448,195 @@ void dump(const FunctionProto& f) {
     }
 }
 
-void translate(FunctionProto& f, const std::vector<int>& depths) {
+// ---- The slots the VM may read again (2026-11-19) ----
+//
+// For each instruction of a function's stack code, the slots of its frame the VM may read from
+// there before writing them: what a way out of native code writes back (Region::stores), every
+// other slot of its frame left as it is, never to be read. A slot is read by an instruction that
+// names it (GetLocal, StoreLocal's value, RangeNext's three, ...) and by one that takes it off the
+// stack, where it is the top (an add reads the two it takes; a Pop and a Settle leave theirs
+// unread); written by one that names it to be written, or puts a value on the stack there. Slot
+// 0 (the receiver, read by the instructions that find a name in it) is always read. Worked out
+// back from where each instruction goes (the verifier's StackSteps), each slot read where any way
+// on reads it before it is written. Not worked out for a function with a `try` (a throw from any
+// instruction goes to its handler) or one that makes closures or objects of its own (which read
+// its slots as theirs later): every slot may be read there. Then for each instruction of the run
+// code (FunctionProto::runTops), those of the stack code instruction it starts at, with the
+// locals the translator's stack names still there (its run code reads them).
+static void slotsLive(FunctionProto& f, const std::vector<int>& depths, const StackSteps& steps) {
+    const std::vector<uint8_t>& code = f.code;
+    const size_t n = code.size(), words = f.runLiveWords;
+    auto none = [&] {
+        f.runLive.clear();
+        f.runLiveWords = 0;
+        f.runOrigins.clear();
+    };
+    if (words == 0 || steps.pops.size() != n || steps.pushes.size() != n || depths.size() != n || f.runOrigins.size() != f.runTops.size() ||
+        f.runLive.size() != f.runTops.size() * words)
+        return none();
+    for (size_t k = 1; k < f.runTops.size(); k++)
+        if (f.runTops[k].first < f.runTops[k - 1].first) return none();
+    const int slots = static_cast<int>(64 * words);
+    struct Step {
+        std::vector<uint64_t> gen, kill;
+        std::vector<uint32_t> next;
+    };
+    std::vector<Step> at(n);
+    std::vector<uint32_t> starts;
+    auto u16 = [&](size_t i) { return static_cast<int>(code[i] | (code[i + 1] << 8)); };
+    for (size_t ip = 0; ip < n; ip += instructionSize(code, ip)) {
+        if (depths[ip] < 0) continue;
+        const Op op = static_cast<Op>(code[ip]);
+        switch (op) {
+            case Op::TryBegin:
+            case Op::Closure:
+            case Op::Capture:
+            case Op::CloseUpvalue:
+            case Op::ObjectClass:
+            case Op::ObjectClassTyped:
+            case Op::StoreClass:
+            case Op::StoreClassTyped:
+            case Op::MakeForms:
+            case Op::MethodForms:
+            case Op::StaticForms:
+            case Op::GetCaptured:
+            case Op::SetCaptured:
+                return none();
+            default: break;
+        }
+        starts.push_back(static_cast<uint32_t>(ip));
+        Step& s = at[ip];
+        s.gen.assign(words, 0);
+        s.kill.assign(words, 0);
+        auto read = [&](int slot) {
+            if (slot >= 0 && slot < slots) s.gen[static_cast<size_t>(slot) / 64] |= uint64_t{1} << (slot % 64);
+        };
+        auto write = [&](int slot) {
+            if (slot >= 0 && slot < slots) s.kill[static_cast<size_t>(slot) / 64] |= uint64_t{1} << (slot % 64);
+        };
+        const int depth = depths[ip], pops = steps.pops[ip], pushes = steps.pushes[ip];
+        bool takes = true;  // whether what it takes off the stack it reads
+        bool falls = true;  // whether it goes on to the next
+        switch (op) {
+            case Op::Pop:
+            case Op::Settle:
+                takes = false;
+                break;
+            case Op::PopUnder:  // the top kept, those under it left
+                takes = false;
+                read(depth - 1);
+                break;
+            case Op::Return:
+                read(depth - 1);
+                falls = false;
+                break;
+            case Op::ReturnInit:
+            case Op::Jump:
+            case Op::Loop:
+            case Op::Throw:
+            case Op::MissingArg:
+            case Op::TailLoop:
+                falls = false;
+                break;
+            case Op::GetLocal:
+            case Op::AddLocal:
+            case Op::SubLocal:
+            case Op::MulLocal:
+            case Op::DivLocal:
+            case Op::ModLocal:
+            case Op::LtLocal:
+            case Op::LeLocal:
+            case Op::GtLocal:
+            case Op::GeLocal:
+            case Op::EqLocal:
+            case Op::CheckLocal:
+            case Op::PlaceLocal:
+            case Op::OwnLocal:
+            case Op::KeepLocal:
+            case Op::SetPlace:  // a value kept in the place its Ref is to, or as SetLocal: read, so kept as it was
+            case Op::ImplicitFirst:
+            case Op::IterNext:
+            case Op::IterNextRef:
+            case Op::IterNextPair:
+            case Op::DefaultArg:
+                read(u16(ip + 1));
+                break;
+            case Op::AddLocals:
+            case Op::SubLocals:
+            case Op::MulLocals:
+            case Op::DivLocals:
+            case Op::LtLocals:
+            case Op::LeLocals:
+            case Op::GtLocals:
+            case Op::GeLocals:
+            case Op::EqLocals:
+                read(u16(ip + 1));
+                read(u16(ip + 3));
+                break;
+            case Op::RangeNext:  // the next value, how many are left, the step
+                for (int k = 0; k < 3; k++) read(u16(ip + 1) + k);
+                break;
+            case Op::WithDestinationAt:  // the place under the call's own slots, made in later
+                read(depth - code[ip + 1] - 1);
+                break;
+            case Op::AddNew:
+            case Op::InsertNew:
+                for (int k = 0; k < depth; k++) read(k);
+                break;
+            default: break;
+        }
+        // What it takes off the stack, read, then what it puts on, written; then a slot it names to
+        // be written. (Read before written: SetLocal reads the top and writes it again.)
+        if (takes)
+            for (int k = depth - pops; k < depth; k++) read(k);
+        for (int k = depth - pops; k < depth - pops + pushes; k++) write(k);
+        switch (op) {
+            case Op::StoreLocal:
+            case Op::SetLocal:
+                write(u16(ip + 1));
+                break;
+            case Op::CopyLocal:
+                read(u16(ip + 1));
+                write(u16(ip + 3));
+                break;
+            default: break;
+        }
+        for (size_t w = 0; w < words; w++) s.kill[w] &= ~s.gen[w];  // read first: not written before
+        const size_t after = ip + instructionSize(code, ip);
+        if (falls && after < n) s.next.push_back(static_cast<uint32_t>(after));
+    }
+    for (const auto& [from, to] : steps.jumps)
+        if (from < n && to < n && !at[from].gen.empty()) at[from].next.push_back(to);
+    // Back from each instruction to the ones before, until nothing changes.
+    std::vector<std::vector<uint64_t>> in(n);
+    for (uint32_t ip : starts) in[ip].assign(words, 0);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto it = starts.rbegin(); it != starts.rend(); ++it) {
+            const Step& s = at[*it];
+            std::vector<uint64_t> live(words, 0);
+            for (uint32_t to : s.next)
+                if (!in[to].empty())
+                    for (size_t w = 0; w < words; w++) live[w] |= in[to][w];
+            for (size_t w = 0; w < words; w++) live[w] = s.gen[w] | (live[w] & ~s.kill[w]);
+            live[0] |= 1;  // the receiver
+            if (live != in[*it]) {
+                in[*it] = std::move(live);
+                changed = true;
+            }
+        }
+    }
+    // Each run code instruction's: its stack code instruction's, and the locals its stack names.
+    for (size_t k = 0; k < f.runTops.size(); k++) {
+        const uint32_t origin = f.runOrigins[k];
+        for (size_t w = 0; w < words; w++)
+            f.runLive[k * words + w] |= origin < n && !in[origin].empty() ? in[origin][w] : ~uint64_t{0};
+    }
+    f.runOrigins.clear();
+    f.runOrigins.shrink_to_fit();
+}
+
+void translate(FunctionProto& f, const std::vector<int>& depths, const StackSteps* steps) {
     if (f.chooser || f.code.empty() || depths.size() != f.code.size()) {
         asItIs(f);
         threadCode(f, 1);
@@ -1427,9 +1651,21 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
                              : std::string(asked) == "joined"    ? Mode::Joined
                              : std::string(asked) == "plain"     ? Mode::Plain
                                                                  : Mode::Full;
+    // What each run code instruction leaves to be read again, where native code may be made of
+    // it (its runTops kept); not worked out, every slot may be.
+    auto live = [&] {
+        if (steps != nullptr && !f.runTops.empty()) {
+            slotsLive(f, depths, *steps);
+        } else {
+            f.runLive.clear();
+            f.runLiveWords = 0;
+        }
+        f.runOrigins.clear();
+    };
     try {
         Translator(f, depths, mode).translate();
         threadCode(f, kOpBytes);
+        live();
         dump(f);
         return;
     } catch (const std::exception& e) {
@@ -1441,6 +1677,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
     }
     Translator(f, depths, Mode::Plain).translate();
     threadCode(f, kOpBytes);
+    live();
     dump(f);
 }
 

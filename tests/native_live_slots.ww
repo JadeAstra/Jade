@@ -1,0 +1,74 @@
+// Ways out of native code write back only the slots the VM may read again from where it goes on
+// (2026-11-19, FunctionProto::runLive): a variable of the loop's body not read again, or a value
+// the stack has taken, is left as it was. Each loop here leaves for the VM with some of its
+// variables still to be read and some not: through a call the VM makes, out of the loop, and by
+// a throw caught by the caller; each gives what the VM gives (the suite's interpret way), and
+// the check-live setting gives each slot left so a value no instruction takes.
+
+fun helper(x : int) : int => x % 7 + 1
+
+// A call in the loop, with variables of the body read after it and not.
+fun walk(items : List<int>, limit : int) : int {
+  var total = 0
+  var i = 0
+  while (i < items.size) {
+    val found = items[i]
+    val doubled = found * 2
+    val kept = found + 3
+    if (doubled > limit) { total += helper(doubled) }
+    total += kept
+    i += 1
+  }
+  return total
+}
+val items = (0 ..< 5000).map { (it * 37) % 101 }
+print(walk(items, 150), walk(items, 0), walk(items, 1000))   // expect: 269900 284792 264983
+
+// Out of the loop: what the loop's body held is not read after, what the function holds is.
+fun firstOver(items : List<int>, limit : int) : string {
+  var seen = 0
+  var last = -1
+  for (i in 0 ..< items.size) {
+    val v = items[i]
+    val w = v * 3
+    if (w > limit) {
+      last = i
+      break
+    }
+    seen += v
+  }
+  return "$seen $last"
+}
+print(firstOver(items, 290), firstOver(items, 1000))   // expect: 873 19 249983 -1
+
+// A throw from the loop (an index past the end), caught by the caller: the loop's variables never
+// read again, the function's own written back for the message.
+fun sumTo(items : List<int>, n : int) : int {
+  var total = 0
+  for (i in 0 ..< n) {
+    val v = items[i]
+    total += v
+  }
+  return total
+}
+try {
+  print(sumTo(items, 4000))
+  print(sumTo(items, 6000))
+} catch (e : IndexOutOfBoundsException) {
+  print(e.message)
+}
+// expect: 200020
+// expect: list index 5000 is out of range (size 5000)
+
+// A value of a value type in a variable's place, read after the call and not.
+fun spans(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    val r = Rect(i, 1, i % 5, 2)
+    val s = Rect(i, 2, 3, 4)
+    if (i % 100 == 0) { t += helper(r.width) }
+    t += s.height + r.x
+  }
+  return t
+}
+print(spans(3000))   // expect: 4510530
