@@ -43,6 +43,8 @@ extern char** environ;
 
 namespace ww {
 
+void (*registerScripts)(VM& vm) = nullptr;
+
 // A request for more memory than the machine could ever give, its memory and page file together,
 // is refused at once, with the same error that running out gives; below that the allocator
 // decides. (Asking anyway would also stop a program built with the address sanitizer, whose
@@ -1445,6 +1447,8 @@ void registerBuiltins(VM& vm) {
     registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);
+    // Scripts compiled as the program runs: where the compiler side is in the file (D161).
+    if (compilerCodePresent()) registerScripts(vm);
     // A built program that reaches neither Jade nor the text engine has their code left out of
     // its file (M6.5 part 5): their names are then not there either.
     if (windowCodePresent()) {

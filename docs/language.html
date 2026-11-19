@@ -442,6 +442,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-reflect-ww">reflect.ww</a></li>
 <li><a href="#file-regex-ww">regex.ww</a></li>
 <li><a href="#file-sandbox-ww">sandbox.ww</a></li>
+<li><a href="#file-script-ww">script.ww</a></li>
 <li><a href="#file-sequence-ww">sequence.ww</a></li>
 <li><a href="#file-set-ww">set.ww</a></li>
 <li><a href="#file-string-ww">string.ww</a></li>
@@ -597,11 +598,16 @@ addButton(widgets)</pre></dd>
 <li><a href="#Regex"><code>Regex</code></a> (21)</li>
 <li><a href="#RegexOption"><code>RegexOption</code></a> (1)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
+<li><a href="#RunningScript"><code>RunningScript</code></a> (6)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
 <li><a href="#Sandbox"><code>Sandbox</code></a> (9)</li>
 <li><a href="#SandboxFiles"><code>SandboxFiles</code></a> (2)</li>
 <li><a href="#SandboxProcess"><code>SandboxProcess</code></a> (8)</li>
 <li><a href="#Sandboxed"><code>Sandboxed</code></a> (1)</li>
+<li><a href="#Script"><code>Script</code></a> (7)</li>
+<li><a href="#ScriptError"><code>ScriptError</code></a> (1)</li>
+<li><a href="#ScriptException"><code>ScriptException</code></a> (1)</li>
+<li><a href="#ScriptProblem"><code>ScriptProblem</code></a> (2)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (6)</li>
@@ -6089,6 +6095,68 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 </div>
 <div class="entry" id="FileChange"><code class="sig">data FileChange(val kind : ChangeKind, val path : FilePath)</code><a class="anchor" href="#FileChange">#</a>
 <p>A file or directory made, changed or deleted in a sandbox.</p>
+</div>
+</section>
+<section class="file" id="file-script-ww">
+<h2>script.ww</h2>
+<h3>Scripts</h3>
+<div class="entry" id="Script"><code class="sig">class Script</code><a class="anchor" href="#Script">#</a>
+<p>A script is WinterWolf source compiled while the program runs, from text or a file, and run in a VM of its own, on a thread of its own: it shares nothing with the program, as a worker does not. The program calls its functions by name; what goes in and what comes back is copied as a worker's messages are: numbers, text, booleans, null, bytes, and lists, maps and sets of those (frozen data shared, not copied).</p>
+<pre>val script = Script.compile(&quot;fun double(n : int) : int =&gt; n * 2&quot;, name = &quot;double.ww&quot;)
+val running = script.start()
+print(running.call(&quot;double&quot;, [21]))   // 42
+running.stop()
+</pre>
+<p>A script that does not compile is a ScriptError listing what is wrong and where; one that throws is a ScriptException in the program, with what it threw. A script compiled once can be started any number of times, each run with its own VM. A program built into an executable that uses Script keeps the compiler (and the standard library's source) in its file.</p>
+<p>So far scripts are trusted: they reach what any program reaches. The API a program gives its scripts, safe scripts and limits come next (docs/scripting-plan.html).</p>
+</div>
+<div class="entry member" id="Script.name"><code class="sig">val name : string</code><a class="anchor" href="#Script.name">#</a>
+<p>The name it was compiled under, which its errors and stack traces give.</p>
+</div>
+<div class="entry member" id="Script.compile"><code class="sig">fun compile(source : string, name : string = &quot;script.ww&quot;, folder : FilePath? = null) : Script</code><a class="anchor" href="#Script.compile">#</a>
+<p><code>source</code> compiled, as a file named <code>name</code> in <code>folder</code> (by default where the program runs), which its imports are looked for from; a ScriptError listing each problem, with its line and column, where it does not compile.</p>
+</div>
+<div class="entry member" id="Script.load"><code class="sig">fun load(path : FilePath) : Script throws IOException</code><a class="anchor" href="#Script.load">#</a>
+<p>The file read and compiled, its imports looked for from its folder; a ScriptError where it does not compile, an IOException where it cannot be read.</p>
+</div>
+<div class="entry member" id="Script.names"><code class="sig">val names : List&lt;string&gt;</code><a class="anchor" href="#Script.names">#</a>
+<p>What it declares at its top level, its functions among them, sorted.</p>
+</div>
+<div class="entry member" id="Script.start"><code class="sig">fun start() : RunningScript</code><a class="anchor" href="#Script.start">#</a>
+<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. A ScriptException where the top level throws.</p>
+</div>
+<div class="entry member" id="Script.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Script.toString">#</a>
+<p>As &quot;Script(door.ww)&quot;.</p>
+</div>
+<div class="entry" id="RunningScript"><code class="sig">class RunningScript</code><a class="anchor" href="#RunningScript">#</a>
+<p>A script started (Script.start), until it is stopped.</p>
+</div>
+<div class="entry member" id="RunningScript.script"><code class="sig">val script : Script</code><a class="anchor" href="#RunningScript.script">#</a>
+<p>The script it runs.</p>
+</div>
+<div class="entry member" id="RunningScript.call"><code class="sig">fun call(function : string, arguments : List&lt;any?&gt; = []) : any?</code><a class="anchor" href="#RunningScript.call">#</a>
+<p>Calls the function the script declares under <code>function</code>, with <code>arguments</code> copied over, and gives what it returns, copied back. The program waits until it answers. A ScriptException where the script throws (with what it threw, and where), has no such function, or has ended.</p>
+</div>
+<div class="entry member" id="RunningScript.stop"><code class="sig">fun stop()</code><a class="anchor" href="#RunningScript.stop">#</a>
+<p>Stops the script, whatever it is doing (at its next call or loop round), and waits until it has ended. A call after that is a ScriptException.</p>
+</div>
+<div class="entry member" id="RunningScript.isRunning"><code class="sig">val isRunning : bool</code><a class="anchor" href="#RunningScript.isRunning">#</a>
+<p>True until it ends: stopped, or ended by itself (its top level called exit).</p>
+</div>
+<div class="entry member" id="RunningScript.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#RunningScript.toString">#</a>
+<p>As &quot;RunningScript(door.ww)&quot;.</p>
+</div>
+<div class="entry" id="ScriptProblem"><code class="sig">value ScriptProblem(val file : string, val line : int, val column : int, val message : string)</code><a class="anchor" href="#ScriptProblem">#</a>
+<p>One thing wrong with a script that does not compile, and where.</p>
+</div>
+<div class="entry member" id="ScriptProblem.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#ScriptProblem.toString">#</a>
+<p>As the compiler writes it: &quot;door.ww:3:5: error: ...&quot;.</p>
+</div>
+<div class="entry" id="ScriptError"><code class="sig">class ScriptError(val problems : List&lt;ScriptProblem&gt;) : Exception(problems.map { it.toString() }.join(&quot;\n&quot;))</code><a class="anchor" href="#ScriptError">#</a>
+<p>A script that does not compile: every problem found, each with its place.</p>
+</div>
+<div class="entry" id="ScriptException"><code class="sig">class ScriptException(message : string? = null) : RuntimeException(message)</code><a class="anchor" href="#ScriptException">#</a>
+<p>A script that threw, has no function of the name called, or is no longer running.</p>
 </div>
 </section>
 <section class="file" id="file-sequence-ww">

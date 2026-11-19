@@ -899,12 +899,16 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     }
     int64_t existing = bundledProgramSize(image);
     if (existing >= 0) image.resize(image.size() - kBundleTrailer - static_cast<size_t>(existing));
-    stripPrelude(image);  // the program carries its own compiled copy of what it uses
     // What a built program never needs is left out of it: the compiler side and the standard
-    // library's source always, and Jade's window with the text engine when nothing left in the
-    // program names them (M6.5 part 5, D161).
-    std::vector<std::string> unneeded{".wwc", ".wws"};
-    if (!namesGlobal(session.program, {"__jade", "__text"})) unneeded.push_back(".wwt");
+    // library's source, and Jade's window with the text engine when nothing left in the program
+    // names them (M6.5 part 5, D161). A program that compiles scripts as it runs (Script) keeps
+    // all of it, and the compiled standard library its scripts are compiled against (the
+    // scripting plan, part 1): a script may use anything.
+    const bool scripts = namesGlobal(session.program, {"__script"});
+    if (!scripts) stripPrelude(image);  // the program carries its own compiled copy of what it uses
+    std::vector<std::string> unneeded;
+    if (!scripts) unneeded = {".wwc", ".wws"};
+    if (!scripts && !namesGlobal(session.program, {"__jade", "__text"})) unneeded.push_back(".wwt");
     if (const std::string inside = startupCodeIn(unneeded); !inside.empty()) {
         std::cerr << "ww: internal error: " << inside << "\n";
         return kExitCannotWrite;
@@ -1635,5 +1639,9 @@ int dispatch(const std::vector<std::string>& given) {
 namespace ww {
 
 int wwCommandMain(const std::vector<std::string>& args) { return dispatch(args); }
+
+// For scripts compiled as a program runs (script.cpp): where their imports of the libraries
+// ww carries are looked for, as for the program's own.
+std::vector<std::string> commandLibraryPaths() { return libraryPaths(); }
 
 }  // namespace ww

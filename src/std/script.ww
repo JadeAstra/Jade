@@ -1,0 +1,113 @@
+// Inside WinterWolf: the work is done by the built-in __script (script.cpp).
+
+// ---- Scripts ----
+// A script is WinterWolf source compiled while the program runs, from text or a file, and run
+// in a VM of its own, on a thread of its own: it shares nothing with the program, as a worker
+// does not. The program calls its functions by name; what goes in and what comes back is
+// copied as a worker's messages are: numbers, text, booleans, null, bytes, and lists, maps and
+// sets of those (frozen data shared, not copied).
+//
+//   val script = Script.compile("fun double(n : int) : int => n * 2", name = "double.ww")
+//   val running = script.start()
+//   print(running.call("double", [21]))   // 42
+//   running.stop()
+//
+// A script that does not compile is a ScriptError listing what is wrong and where; one that
+// throws is a ScriptException in the program, with what it threw. A script compiled once can be
+// started any number of times, each run with its own VM. A program built into an executable
+// that uses Script keeps the compiler (and the standard library's source) in its file.
+//
+// So far scripts are trusted: they reach what any program reaches. The API a program gives
+// its scripts, safe scripts and limits come next (docs/scripting-plan.html).
+class Script {
+  internal val handle : any
+  // The name it was compiled under, which its errors and stack traces give.
+  val name : string
+
+  internal fun init(handle : any, name : string) {
+    this.handle = handle
+    this.name = name
+  }
+
+  static {
+    // `source` compiled, as a file named `name` in `folder` (by default where the program
+    // runs), which its imports are looked for from; a ScriptError listing each problem, with its
+    // line and column, where it does not compile.
+    fun compile(source : string, name : string = "script.ww", folder : FilePath? = null) : Script throws ScriptError {
+      val made = __script.compile(source, name, (folder ?: FilePath(".")).absolute.toString())
+      if (made is List) {
+        val problems = (made as List<List<any>>).map {
+          ScriptProblem(it[0] as string, it[1] as int, it[2] as int, it[3] as string)
+        }
+        throw ScriptError(problems)
+      }
+      return Script(made, name)
+    }
+
+    // The file read and compiled, its imports looked for from its folder; a ScriptError where it
+    // does not compile, an IOException where it cannot be read.
+    fun load(path : FilePath) : Script throws IOException | ScriptError =>
+      compile(path.readText(), path.name, path.absolute.parent ?: FilePath("."))
+  }
+
+  // What it declares at its top level, its functions among them, sorted.
+  val names : List<string>
+    get() => __script.names(handle) as List<string>
+
+  // Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for
+  // calls. A ScriptException where the top level throws.
+  fun start() : RunningScript {
+    val started = __script.start(handle)
+    if (started is string) { throw ScriptException("$name: ${started as string}") }
+    return RunningScript(started, this)
+  }
+
+  // As "Script(door.ww)".
+  override fun toString() : string => "Script($name)"
+}
+
+// A script started (Script.start), until it is stopped.
+class RunningScript {
+  internal val handle : any
+  // The script it runs.
+  val script : Script
+
+  internal fun init(handle : any, script : Script) {
+    this.handle = handle
+    this.script = script
+  }
+
+  // Calls the function the script declares under `function`, with `arguments` copied over, and
+  // gives what it returns, copied back. The program waits until it answers. A ScriptException
+  // where the script throws (with what it threw, and where), has no such function, or has ended.
+  fun call(function : string, arguments : List<any?> = []) : any? {
+    val answer = __script.call(handle, function, arguments) as List<any?>
+    if (!(answer[0] as bool)) { throw ScriptException("${script.name}: ${answer[1] as string}") }
+    return answer[1]
+  }
+
+  // Stops the script, whatever it is doing (at its next call or loop round), and waits until
+  // it has ended. A call after that is a ScriptException.
+  fun stop() {
+    __script.stop(handle)
+  }
+
+  // True until it ends: stopped, or ended by itself (its top level called exit).
+  val isRunning : bool
+    get() => __script.isRunning(handle) as bool
+
+  // As "RunningScript(door.ww)".
+  override fun toString() : string => "RunningScript(${script.name})"
+}
+
+// One thing wrong with a script that does not compile, and where.
+value ScriptProblem(val file : string, val line : int, val column : int, val message : string) {
+  // As the compiler writes it: "door.ww:3:5: error: ...".
+  override fun toString() : string => "$file:$line:$column: error: $message"
+}
+
+// A script that does not compile: every problem found, each with its place.
+class ScriptError(val problems : List<ScriptProblem>) : Exception(problems.map { it.toString() }.join("\n"))
+
+// A script that threw, has no function of the name called, or is no longer running.
+class ScriptException(message : string? = null) : RuntimeException(message)

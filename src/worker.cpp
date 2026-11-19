@@ -383,8 +383,8 @@ void encode(VM& vm, Value v, std::string& out, int depth) {
         const ObjClass* of = classOf(v);
         const bool ordinary = of != nullptr && v.isObjType(ObjType::Instance) && !of->isEnum;
         throw vm.runtimeError(Thrown::IllegalArgumentException,
-                              "a message to or from a worker can hold numbers, strings, booleans, null, bytes, objects of data classes and value types, and lists, maps and sets of those, not " +
-                                  (ordinary ? "an object of " + vm.typeName(v) + ", an ordinary class: the worker would have a copy, not the object; make it a data class, or send its fields"
+                              "what passes to or from a worker or a script can hold numbers, strings, booleans, null, bytes, objects of data classes and value types, and lists, maps and sets of those, not " +
+                                  (ordinary ? "an object of " + vm.typeName(v) + ", an ordinary class: the other side would have a copy, not the object; make it a data class, or send its fields"
                                             : "a value of type " + vm.typeName(v) + ": the two share no objects"));
     }
 }
@@ -712,6 +712,13 @@ std::shared_ptr<WorkerLink> linkOf(VM& vm, Value id) {
 
 }  // namespace
 
+std::shared_ptr<Message> messageFor(VM& vm, Value v) { return writeMessage(vm, v, false); }
+
+Value readMessage(VM& vm, const Message& message) {
+    Reader in{message.data.data(), message.data.data() + message.data.size()};
+    return decode(vm, in);
+}
+
 void registerWorkers(VM& vm) {
     ObjClass* worker = vm.alloc<ObjClass>(vm.intern("worker"));
     auto def = [&](const char* name, int minArgs, int maxArgs, NativeFn fn) {
@@ -788,7 +795,8 @@ void registerWorkers(VM& vm) {
 
     // ---- For the worker itself ----
 
-    def("inWorker", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::boolean(vm.isWorker()); });
+    // A script's VM is made as a worker's is, with no parent to talk to (script.cpp).
+    def("inWorker", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::boolean(vm.isWorker() && vm.workerLink != nullptr); });
 
     // The object whose onMessage gets what the parent sends.
     def("attach", 1, 1, [](VM& vm, int, Value* args) -> Value {

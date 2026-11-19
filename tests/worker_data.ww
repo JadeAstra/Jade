@@ -79,7 +79,7 @@ task {
   // An object of an ordinary class has an identity: it is refused where it is sent.
   class Plain(val n : int)
   print(attempt { worker.post(Plain(1)) })
-  // expect: IllegalArgumentException: a message to or from a worker can hold numbers, strings, booleans, null, bytes, objects of data classes and value types, and lists, maps and sets of those, not an object of Plain, an ordinary class: the worker would have a copy, not the object; make it a data class, or send its fields
+  // expect: IllegalArgumentException: what passes to or from a worker or a script can hold numbers, strings, booleans, null, bytes, objects of data classes and value types, and lists, maps and sets of those, not an object of Plain, an ordinary class: the other side would have a copy, not the object; make it a data class, or send its fields
 
   // A data class declared inside a function: the other side has no way to make one.
   data Local(val n : int)

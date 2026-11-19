@@ -220,7 +220,9 @@ int runBundled(const std::filesystem::path& exe, std::vector<std::string> script
     return runProgram(vm, program, program.entry);
 }
 
-bool windowCodePresent() {
+namespace {
+// Whether the named section's bytes are in this executable's file.
+bool sectionPresent(const char* name) {
 #ifdef _WIN32
     // The section's header is still there when its bytes are left out, with none of them in the
     // file; the loaded image's headers are the file's.
@@ -229,9 +231,20 @@ bool windowCodePresent() {
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
     const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(nt);
     for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
-        if (std::strncmp(reinterpret_cast<const char*>(section->Name), ".wwt", IMAGE_SIZEOF_SHORT_NAME) == 0) return section->SizeOfRawData != 0;
+        if (std::strncmp(reinterpret_cast<const char*>(section->Name), name, IMAGE_SIZEOF_SHORT_NAME) == 0) return section->SizeOfRawData != 0;
+#else
+    (void)name;
 #endif
     return true;
+}
+}  // namespace
+
+bool windowCodePresent() { return sectionPresent(".wwt"); }
+
+bool compilerCodePresent() {
+    // A built program without the compiler side has no ww command either; the window's proof
+    // build (D161), linked with no compiler side at all, has none to look for.
+    return registerScripts != nullptr && sectionPresent(".wwc");
 }
 
 int startExecutable(int argc, char** argv, int (*command)(const std::vector<std::string>& args)) {

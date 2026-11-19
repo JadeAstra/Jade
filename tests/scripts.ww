@@ -1,0 +1,103 @@
+// Scripts compiled and run as the program runs (the scripting plan, part 1): source text or a
+// file compiled into a program of its own, started in a VM of its own on a thread of its own,
+// its functions called by name with what goes in and out copied. Run in all five ways, a built
+// program among them, which then keeps the compiler.
+
+// ---- From text: compiled, started, called ----
+val doubler = Script.compile("fun double(n : int) : int => n * 2\nfun greet(who : string) : string => \"hello, \" + who", name = "double.ww")
+print(doubler, doubler.name, doubler.names)          // expect: Script(double.ww) double.ww ["double", "greet"]
+val running = doubler.start()
+print(running.call("double", [21]), running.call("greet", ["world"]), running.isRunning)   // expect: 42 hello, world true
+var sum = 0
+for (i in 0 ..< 200) { sum += running.call("double", [i]) as int }
+print(sum)                                           // expect: 39800
+
+// What goes in and comes back is copied: lists, maps, sets, bytes, nested.
+val echo = Script.compile("fun echo(x : any?) : any? => x\nfun tally(m : Map<string, int>) : int {
+  var t = 0
+  for (v in m.values) { t += v }
+  return t
+}").start()
+val sent = [1, "two", 3.5, null, true, 'c', [4, [5]], {"k": [6]}]
+val back = echo.call("echo", [sent]) as List<any?>
+print(back, back == sent)                            // expect: [1, "two", 3.5, null, true, 'c', [4, [5]], {"k": [6]}] true
+print(echo.call("echo", [setOf(1, 2)]), echo.call("echo", [Bytes([1, 2, 255])]), echo.call("tally", [{"a": 1, "b": 2}]))   // expect: {1, 2} Bytes[1, 2, 255] 3
+val mine = [1, 2]
+val copy = echo.call("echo", [mine]) as open List<int>
+copy.add(3)
+print(mine, copy)                                    // expect: [1, 2] [1, 2, 3]
+
+// ---- What goes wrong, as values ----
+fun failed(block : () -> any?) : string {
+  try {
+    block()
+    return "no error"
+  } catch (e : ScriptException) {
+    return "ScriptException: ${e.message}"
+  }
+}
+print(failed { running.call("nothing") })           // expect: ScriptException: double.ww: the script has no function named 'nothing'
+print(failed { running.call("double", ["x"]) }.lines()[0])   // expect: ScriptException: double.ww: IllegalArgumentException: argument 'n' of double() must be int, got string
+val thrower = Script.compile("fun boom(n : int) : int {\n  if (n > 1) { throw IllegalStateException(\"too big: \" + n) }\n  return n\n}", name = "boom.ww").start()
+print(failed { thrower.call("boom", [5]) })         // expect: ScriptException: boom.ww: IllegalStateException: too big: 5
+// expect:   at boom (boom.ww:2)
+print(thrower.call("boom", [1]))                    // expect: 1
+// A class of the script's own does not cross: data does, and the standard library's value types.
+val classy = Script.compile("class Point(val x : int)\nfun make() : any => Point(1)", name = "classy.ww").start()
+print(failed { classy.call("make") }.contains("not an object of Point, an ordinary class"))   // expect: true
+print(Script.compile("fun pair() : any => Pair(1, \"a\")").start().call("pair"))   // expect: Pair(first=1, second="a")
+
+// A script that does not compile: every problem, in order, with its place.
+try {
+  Script.compile("fun f() : int => \"x\"\nval y : string = 5\nfun g() { nothing() }", name = "bad.ww")
+} catch (e : ScriptError) {
+  print(e.problems.size)                             // expect: 3
+  for (p in e.problems) { print(p.file, p.line, p.column) }
+  // expect: bad.ww 1 18
+  // expect: bad.ww 2 18
+  // expect: bad.ww 3 11
+  print(e.problems[0].message)                       // expect: this function gives an int; it cannot return a string
+}
+// One whose top level throws does not start.
+print(failed { Script.compile("print(\"starting\")\nthrow IllegalStateException(\"no\")", name = "top.ww").start() }.lines()[0])
+// expect: starting
+// expect: ScriptException: top.ww: IllegalStateException: no
+
+// ---- Each start a VM of its own ----
+val counter = Script.compile("var count = 0\nfun next() : int { count += 1\nreturn count }", name = "counter.ww")
+val one = counter.start()
+val two = counter.start()
+print(one.call("next"), one.call("next"), two.call("next"))   // expect: 1 2 1
+// Not a worker: it has no parent to talk to.
+print(Script.compile("fun parent() : bool => Worker.parent != null").start().call("parent"))   // expect: false
+
+// ---- Stopped ----
+running.stop()
+print(running.isRunning, failed { running.call("double", [1]) })   // expect: false ScriptException: double.ww: the script is not running
+running.stop()                                       // again: nothing more to do
+// Stopped in the middle of a call that would never end: the call fails, the program goes on.
+val looper = Script.compile("fun spin() : int { var n = 0\nwhile (true) { n += 1 }\nreturn n }", name = "spin.ww").start()
+val stopper = thread {
+  Thread.sleep(100.milliseconds)
+  looper.stop()
+}
+print(failed { looper.call("spin") }.startsWith("ScriptException: spin.ww: the script"))   // expect: true
+stopper.get()
+print(looper.isRunning)                              // expect: false
+// A script that calls exit() ends itself, not the program.
+val quitter = Script.compile("fun quit() { exit(3) }", name = "quit.ww").start()
+print(failed { quitter.call("quit") }, quitter.isRunning)   // expect: ScriptException: quit.ww: the script ended before it answered false
+
+// ---- From a file, with an import beside it ----
+val dir = FilePath.createTempDirectory("ww_scripts")
+dir.resolve("helper.ww").writeText("fun triple(n : int) : int => n * 3\n")
+dir.resolve("main.ww").writeText("import \"helper.ww\"\nfun nine() : int => helper.triple(3)\n")
+val loaded = Script.load(dir.resolve("main.ww")).start()
+print(loaded.call("nine"), loaded.script.name)      // expect: 9 main.ww
+loaded.stop()
+dir.deleteRecursively()
+
+// Running scripts the program no longer reaches are stopped when collected.
+for (i in 0 ..< 5) { counter.start() }
+Program.collectGarbage()
+print("done")                                        // expect: done

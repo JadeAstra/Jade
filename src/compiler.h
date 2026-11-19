@@ -148,6 +148,13 @@ public:
     int compileSource(const std::string& source, const std::string& name, const std::string& baseDirectory,
                       bool shell = false);
 
+    // A script given to Script.compile as a program runs (scripting plan, part 1): source text
+    // made the program's entry module, with names of its own as a worker's script has, its
+    // imports looked for from `baseDirectory`. `names` gets the global slot of each name it
+    // declares at its top level, which the program calls its functions by.
+    int compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
+                      std::unordered_map<std::string, int>& names);
+
 private:
     friend class ModuleCompiler;
 

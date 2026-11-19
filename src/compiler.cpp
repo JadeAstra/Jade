@@ -9425,6 +9425,36 @@ FunctionProto* CompilerSession::compileStatements(const std::vector<StmtPtr>& st
     return proto;
 }
 
+int CompilerSession::compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
+                                   std::unordered_map<std::string, int>& names) {
+    forgetPaths();
+    const std::string key = "<script>" + name;
+    const int index = static_cast<int>(program.modules.size());
+    program.modules.push_back(nullptr);
+    modules_[key] = index;
+    noteModule(index, key);
+    std::unique_ptr<Namespace>& ns = namespaces_[key];
+    ns = std::make_unique<Namespace>();
+    ns->directory = baseDirectory;
+    ns->library = "<program>";
+    sources_.push_back(std::make_unique<std::vector<StmtPtr>>(parseSource(source, name)));
+    std::vector<StmtPtr>& statements = *sources_.back();
+    try {
+        gather(key, name, baseDirectory, statements, ns.get(), false);
+        check();
+        program.modules[static_cast<size_t>(index)] = compileStatements(statements, name, baseDirectory, key, false, ns.get());
+        checkConstAssignments();
+    } catch (...) {
+        globalAssignments_.clear();
+        throw;
+    }
+    globalAssignments_.clear();
+    for (const auto& [n, global] : ns->names)
+        if (global.declared) names[n] = global.slot;
+    program.entry = index;
+    return index;
+}
+
 // The script named in `Worker("physics.ww")`, looked for next to the file that names it.
 // It becomes a module of the program that only a worker runs, so that a program built into
 // an executable carries its workers with it. Its names are its own: the rest of the program

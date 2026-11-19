@@ -68,5 +68,11 @@ int wwCommandMain(const std::vector<std::string>& args);
 // Whether the part of this executable with Jade's window, drawing and the text engine is in
 // its file: a built program that reaches neither has it left out (M6.5 part 5).
 bool windowCodePresent();
+// Whether the compiler side (and the standard library's source) is in its file: a built
+// program keeps it only where it uses Script, which compiles as the program runs (D161).
+bool compilerCodePresent();
+// ww's compiler side, for scripts compiled as a program runs (script.cpp): what main sets
+// registerScripts to.
+void registerScriptsHere(VM& vm);
 
 }  // namespace ww

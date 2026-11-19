@@ -19,6 +19,7 @@
 #endif
 
 #include "compiler.h"
+#include "run.h"  // kBundleMarker: a built program's trailer
 #include "section_compiler.h"  // last: this file's own code goes in its section (D161)
 
 namespace ww {
@@ -258,7 +259,16 @@ bool attachedPrelude(std::string& image) {
     bool found = false;
     char trailer[kPreludeTrailer];
     if (std::fseek(file, 0, SEEK_END) == 0) {
-        const long size = std::ftell(file);
+        long size = std::ftell(file);
+        // A built program that keeps the compiler (it uses Script) has its own program after the
+        // standard library, with a trailer of its own: the library is before that.
+        char bundle[kBundleTrailer];
+        if (size > static_cast<long>(kBundleTrailer) && std::fseek(file, size - static_cast<long>(kBundleTrailer), SEEK_SET) == 0 &&
+            std::fread(bundle, 1, sizeof bundle, file) == sizeof bundle &&
+            std::memcmp(bundle + 8, kBundleMarker, sizeof kBundleMarker) == 0) {
+            const uint64_t program = trailerSize(bundle);
+            if (program <= static_cast<uint64_t>(size) - kBundleTrailer) size -= static_cast<long>(kBundleTrailer + program);
+        }
         if (size > static_cast<long>(kPreludeTrailer) && std::fseek(file, size - static_cast<long>(kPreludeTrailer), SEEK_SET) == 0 &&
             std::fread(trailer, 1, sizeof trailer, file) == sizeof trailer &&
             std::memcmp(trailer + 8, kPreludeMarker, sizeof kPreludeMarker) == 0) {

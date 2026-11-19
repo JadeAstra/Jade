@@ -1025,7 +1025,7 @@ public:
     void runEventLoop(bool wait, int64_t budgetMs = -1, Value until = Value::null());
     // True if threads are still running, in which case the process has to end without
     // taking the VM apart under them.
-    bool threadsAlive() const { return threads_.size() > 1 || pendingJobs_ > 0 || liveWorkers_ > 0; }
+    bool threadsAlive() const { return threads_.size() > 1 || pendingJobs_ > 0 || liveWorkers_ > 0 || liveScripts_.load() > 0; }
     // How long until the next timer is due, in milliseconds: 0 if something is ready now,
     // -1 if there is nothing to wait for. For a loop of another kind (a window's) that
     // has to wake up in time to call runEventLoop(false).
@@ -1195,6 +1195,10 @@ public:
     int64_t nextWorkerId = 1;
     void workerStarted() { liveWorkers_++; }
     void workerEnded() { liveWorkers_--; }
+    // The scripts this VM started whose threads have not ended (script.cpp): counted from those
+    // threads, as each ends.
+    void scriptStarted() { liveScripts_++; }
+    void scriptEnded() { liveScripts_--; }
     // Asks this VM, from another thread, to stop what it is doing: every one of its threads
     // gets a WorkerStop at its next safe point.
     void requestStop();
@@ -1320,6 +1324,7 @@ private:
     std::vector<ObjFiber*> waitingFibers_;  // tasks set aside until work in progress is done
     bool isWorker_ = false;
     int liveWorkers_ = 0;
+    std::atomic<int> liveScripts_{0};
 
     // Parallel sections
     VM* root_ = nullptr;           // for a core's VM: the VM whose objects it works on
@@ -1806,6 +1811,15 @@ void registerXml(VM& vm);      // xml_scan.cpp: what Xml.scan is built on (M9/M1
 void registerRegex(VM& vm);    // regex_api.cpp: what Regex is built on (N5, M8)
 void registerForeign(VM& vm);  // foreign.cpp: Library, Memory and Foreign (M8)
 void registerWorkers(VM& vm);  // worker.cpp: isolated workers
+// For scripts (script.cpp): a value written out as a worker's message is, to be read by another
+// VM; and such a message read back. Frozen data in it is shared, as in a worker's (D97).
+struct Message;
+std::shared_ptr<Message> messageFor(VM& vm, Value v);
+Value readMessage(VM& vm, const Message& message);
+// The scripts a program compiles and runs as it runs (script.cpp, the scripting plan): set by
+// ww's main, whose compiler side they are part of, and registered where that side is in the
+// file (a built program keeps it only where it uses Script, D161).
+extern void (*registerScripts)(VM& vm);
 void registerParallel(VM& vm); // parallel.cpp: parallel sections
 void registerText(VM& vm);     // text/api.cpp: fonts, text and pictures
 // What started this program (see __io.selfCommand): set by main before the program runs.
