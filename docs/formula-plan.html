@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formula plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: a formula engine for WinterWolf programs</h1>
+<p class="lede">Written 2026-11-19 at the user's word. Asked "snips also has functions working in cells, should this be part of ww or only in snips?", the answer recommended was a library of ww's own, with Snips' document parts staying in Snips. The user then said "yes, write the formula plan after bigint and complex". Its questions answered the same day, all as recommended (the user: "do as Recommended for the formula plan"): a library of its own, built after the scripting plan and before the emitter.</p>
+
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#fp-snips">What Snips has</a></li>
+<li><a href="#fp-split">What moves to ww, what stays in Snips</a></li>
+<li><a href="#fp-design">The design</a></li>
+<li><a href="#fp-parts">The parts, each with its gate</a></li>
+<li><a href="#fp-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="fp-snips">What Snips has</h2>
+<p>Read 2026-11-19 in <code>C:\Users\sciss\IdeaProjects\Snips</code>, package <code>com.snips.formula</code>: 21 files and 3,888 lines of Kotlin. About 2,300 of those lines are the general engine; the rest belongs to Snips' documents.</p>
+<ul>
+<li><strong>The language</strong> (<code>Lexer.kt</code>, the parser in <code>Evaluator.kt</code>, <code>Cells.kt</code>):
+<ul>
+<li>Numbers, strings with no escapes, <code>TRUE</code> and <code>FALSE</code>, and arrays written <code>[1,2]</code> or <code>[[1,2],[3,4]]</code>.</li>
+<li>References: <code>A1</code>, <code>$A$1</code> and ranges <code>A1:B5</code>. Open ranges (<code>A</code>, <code>A:C</code>, <code>A4:A</code>) are filled in from the table's size. Lowercase hint forms (<code>c5</code>, <code>r5</code>, <code>c1r1</code>) also work.</li>
+<li>Other tables and blocks are reached by dotted paths: <code>T1.A1</code>, <code>M1.f(5)</code>, <code>S1.fn()</code>.</li>
+<li>Operators, loosest first: <code>or</code>, <code>and</code>, <code>not</code>; one comparison (<code>= &lt;&gt; &lt; &gt; &lt;= &gt;=</code>, also <code>≠ ≤ ≥</code>); <code>&amp;</code>; <code>+ -</code>; <code>* / %</code> (<code>%</code> is modulo) and multiplication by juxtaposition (<code>2x</code>); unary signs; <code>^</code>, right to left, so <code>-2^2</code> is -4.</li>
+<li>Not there: exponent notation inside a formula (<code>1e3</code> reads as 1 times <code>e3</code>), LET, LAMBDA, and results that spill into neighbouring cells.</li>
+</ul></li>
+<li><strong>Values</strong> (<code>Value.kt</code>):
+<ul>
+<li>The kinds: a number (a double), text, a bool, an error with a detail, empty, a matrix, and two of Snips' own: <code>Styled</code> (a value with its look) and <code>Rich</code> (text with pictures).</li>
+<li>The errors: <code>#DIV/0! #REF! #NAME? #VALUE! #N/A #NUM! #CIRC!</code> and four of Snips' own.</li>
+<li>Dates are Excel's serial numbers.</li>
+<li>Conversions are Excel's. Text compares without case. Numbers are equal within 1e-12 relative. Rounding goes half away from zero, and display shows 15 significant digits.</li>
+</ul></li>
+<li><strong>Calculation:</strong>
+<ul>
+<li>There is no dependency graph. Each change rebuilds the notebook and works out every cell again, on demand, keeping each result once worked out; bursts of edits are run together first.</li>
+<li>A cycle gives <code>#CIRC!</code>. Every argument is worked out before a call, so <code>IF</code> evaluates both of its branches.</li>
+<li>Matrices follow linear algebra: <code>*</code> is the matrix product.</li>
+</ul></li>
+<li><strong>Functions</strong> (<code>Compute.kt</code>): 91 names and 9 aliases. They cover maths, rounding, aggregates, statistics, logic, text, lookups (<code>VLOOKUP XLOOKUP MATCH INDEX</code>), conditional sums, dates and matrices. Snips adds 6 more for its feature trackers. The engine has no financial or engineering functions, no <code>SUMIFS</code>, and no <code>INDIRECT</code>. A reference of every function (<code>help/FormulaReference.kt</code>) feeds autocomplete and the hover cards.</li>
+<li><strong>Moving references</strong> (<code>RefRewriter.kt</code>, 221 lines): references are rewritten for fill, paste, move, and inserting or deleting rows and columns.</li>
+<li><strong>Tests:</strong> 208 for the engine and about 100 more around it.</li>
+</ul>
+
+<h2 id="fp-split">What moves to ww, what stays in Snips</h2>
+<div class="table"><table>
+<tr><th>In ww's library</th><th>In Snips</th></tr>
+<tr><td>
+<ul>
+<li>The formula language: parser, references and ranges, operators.</li>
+<li>Values and errors, with Excel's conversions.</li>
+<li>Sheets of cells, recalculation and cycles.</li>
+<li>The functions, each with its reference entry.</li>
+<li>Moving references for fill, paste, move, insert and delete.</li>
+<li>The ways a program adds its own functions, references and kinds of value.</li>
+</ul>
+</td><td>
+<ul>
+<li>Notebooks and their blocks (<code>T1</code>, <code>M1</code>, <code>S1</code>, <code>J1</code>, <code>F1</code>), joined to the library through its hooks.</li>
+<li>Cell looks: <code>#bg=</code>, <code>styled(...)</code>, format masks, the <code>Styled</code> and <code>Rich</code> values.</li>
+<li><code>AUTOFILL</code> and <code>GENERATE</code>, the tracker functions, math sections and <code>Algebra.kt</code>, charts.</li>
+<li>Saving to HTML, Markdown export, the fx bar and hover cards (fed by the library's reference).</li>
+<li>Calls into Snippy and Snip.js scripts, made through the <a href="scripting-plan.html">scripting plan</a>'s interfaces.</li>
+</ul>
+</td></tr>
+</table></div>
+<p>Any ww program can use the library: a game's stat and balance tables, a tool's settings sheet, a Jade table with computed columns. Snips, once it moves to ww, uses it in place of its own engine.</p>
+
+<h2 id="fp-design">The design</h2>
+<pre><code>import Formula
+
+val book = Workbook()
+val sheet = book.sheet("Stats")
+sheet["A1"] = 10
+sheet["A2"] = 32
+sheet["A3"] = "=SUM(A1:A2) * 2"
+print(sheet.value("A3"))              // 84
+sheet["A1"] = 20                     // A3 is marked; read again, it is 104
+print(Formula.evaluate("ROUND(PI() * 2, 3)"))   // 6.283
+
+// A program's own function, and references of its own (Snips' T1.A1, M1.f(5)).
+book.functions.add("DAMAGE", 2) { args -&gt; args[0].number * (1.0 - args[1].number) }
+book.resolver = MyBlocks()            // an interface: what T1, M1, S1 are</code></pre>
+<ul>
+<li><strong>Written in WinterWolf</strong> ("Jade first"), carried inside ww.exe as Jade is, and left out of built programs that do not import it.</li>
+<li><strong>Formulas are parsed once</strong> into a tree, kept with their cell, and evaluated by walking it. The tree also records the cells it reads, and that gives the dependency graph.</li>
+<li><strong><code>FormulaValue</code></strong> is a sealed set: number, text, bool, error (a code and a detail), empty, matrix, and <code>Other(any)</code>. <code>Other</code> carries a host's own values (Snips' <code>Styled</code> and <code>Rich</code>) through formulas untouched. Functions that do not know such a value give <code>#VALUE!</code>.</li>
+<li><strong>The function table</strong> is open: the library's functions come first, and a program adds or replaces functions by name. Each function has a reference entry (its arguments, a line describing it, an example), which a program can list for autocomplete and help.</li>
+<li><strong>The reference resolver</strong> is an interface. Plain <code>A1</code> references and named ranges are the library's own. A dotted name (<code>T1.A1</code>, <code>M1.x</code>) or a call on one (<code>S1.fn()</code>) goes to the program's resolver. A call into a script is the program's business: Snips makes it through the scripting plan's interfaces.</li>
+<li><strong>Numbers are doubles</strong>, as in Snips and Excel. <code>BigInt</code> and <code>Complex</code> are not cell values (question 5).</li>
+</ul>
+
+<h2 id="fp-parts">The parts, each with its gate</h2>
+<div class="table"><table>
+<tr><th>Part</th><th>What</th><th>Gate</th></tr>
+<tr><td class="part">1. The language</td><td>Tokens, the parser and the tree; references in all of Snips' forms; values, conversions, operators with matrices, and errors; <code>Formula.evaluate</code> for a formula with no sheet.</td><td>Snips' language, reference-grammar and numeric tests (<code>FormulaLanguageTest</code>, <code>RefGrammarTest</code>, <code>NumericFidelityTest</code>), ported, give the same answers.</td></tr>
+<tr><td class="part">2. The functions</td><td>The 91 functions and their aliases, as Snips has them, each with its reference entry.</td><td><code>FormulaFunctionsTest</code> and <code>FormulaReferenceTest</code>, ported, give the same answers; every function has an entry.</td></tr>
+<tr><td class="part">3. Sheets and recalculation</td><td>Workbook, sheets and cells, named ranges, the dependency graph, marking cells to work out again, cycles, and volatile functions (<code>NOW</code>, <code>RAND</code>).</td><td><code>EvaluatorTest</code> and <code>NamesTest</code>, ported. A random-edit test checks that working out only what changed gives the same as working out everything, over thousands of edits.</td></tr>
+<tr><td class="part">4. Moving references</td><td>Fill, paste, move, and inserting or deleting rows and columns, with the library's own references rewritten.</td><td><code>RefRewriterTest</code> and <code>SheetOpsTest</code>, ported.</td></tr>
+<tr><td class="part">5. The hooks</td><td>Functions a program adds, its resolver for dotted references, and <code>Other</code> values.</td><td>A Snips-shaped example: <code>T1.A1</code> across tables, <code>M1.f(5)</code> through the resolver, a script function called from a cell (once the scripting plan's part 2 is built), and a <code>Styled</code> value carried through a formula.</td></tr>
+<tr><td class="part">6. Written up</td><td>The guide's chapter, the function reference made into a page, and two examples: a game's stat table, and a Jade table with a computed column.</td><td>The examples run as tests.</td></tr>
+</table></div>
+<p>Each part is finished, tested, committed and reported before the next starts, on the user's word.</p>
+
+<h2 id="fp-questions">Questions for the user</h2>
+<p>Each comes with a recommendation and the reason for it.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>A library of its own, or part of the standard library?</h3>
+<ul>
+<li><strong>A library of its own</strong> (<code>import Formula</code>), carried in ww.exe as Jade is: the standard library stays the language's core, and a built program that does not use formulas carries none of it.</li>
+<li><strong>In the standard library:</strong> always there, with no import needed; but a spreadsheet engine is a domain library, as windows are.</li>
+</ul>
+<p><em>Recommended:</em> a library of its own, named <code>Formula</code>.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("do as Recommended for the formula plan"): a library of its own, <code>import Formula</code>, carried in ww.exe as Jade is.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>Whose formula language: Snips' exactly, or Excel's?</h3>
+<ul>
+<li><strong>Snips' exactly:</strong> every Snips document works out the same once Snips moves to ww. That includes <code>%</code> as modulo, juxtaposition, <code>or</code>/<code>and</code>/<code>not</code> as words, <code>[..]</code> arrays, dotted paths and the hint forms.</li>
+<li><strong>Excel's:</strong> <code>%</code> as a percent, <code>{..}</code> arrays, <code>Sheet!A1</code>, <code>AND()</code> as a function only. Familiar to more people, but Snips' documents would change their answers.</li>
+<li><strong>Both,</strong> chosen per workbook: twice the language to test.</li>
+</ul>
+<p><em>Recommended:</em> Snips' exactly, plus exponent notation in formulas (<code>1e3</code>, which today reads as 1 times <code>e3</code>), which only adds. The Snips session decides whether <code>1e3</code> may change meaning in its documents.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user (as recommended): Snips' language exactly, plus exponent notation in formulas; the Snips session decides whether <code>1e3</code> may change meaning in its documents.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>Recalculation: everything each time, or what changed?</h3>
+<ul>
+<li><strong>Everything, as Snips does:</strong> simple and already right; costs the whole book at every edit.</li>
+<li><strong>What changed:</strong> a dependency graph and marking. A game updating a stat each frame, or a large Jade table, needs it. A random-edit test (part 3's gate) keeps it honest against working out everything.</li>
+</ul>
+<p><em>Recommended:</em> what changed, with "everything" kept as a check and an option.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user (as recommended): what changed, through a dependency graph, with "everything" kept as a check and an option.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span><code>IF</code> and its kind: both branches worked out, or only the one taken?</h3>
+<ul>
+<li><strong>Both, as Snips does:</strong> the same answers as now. But a branch never taken can still give a <code>#CIRC!</code>, slow a sheet, or call a script for nothing.</li>
+<li><strong>Only the one taken</strong> (<code>IF IFS IFERROR IFNA CHOOSE</code>, and <code>and</code>/<code>or</code>): as Excel does. Answers differ only where the branch not taken was a cycle, or called something that matters.</li>
+</ul>
+<p><em>Recommended:</em> only the one taken.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user (as recommended): only the branch taken, for <code>IF IFS IFERROR IFNA CHOOSE</code> and <code>and</code>/<code>or</code>.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>Numbers in cells: doubles only?</h3>
+<ul>
+<li><strong>Doubles,</strong> as Snips and Excel: every function is defined on them, and the tests compare against Snips.</li>
+<li><strong>BigInt and Complex too:</strong> exact factorials and complex results in cells, but every function would need to say what it does with them.</li>
+</ul>
+<p><em>Recommended:</em> doubles. A program that wants others can add them through <code>Other</code> and its own functions.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user (as recommended): doubles; other kinds through <code>Other</code> and a program's own functions.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">6</span>When?</h3>
+<ul>
+<li><strong>After the scripting plan, before the emitter:</strong> part 5 needs the scripting plan's interfaces for calls into scripts, and Snips' move to ww needs both.</li>
+<li><strong>After the emitter and the image work:</strong> the order agreed so far (the scripting plan, then the emitter, then PNG and WebP) stays as it is.</li>
+</ul>
+<p><em>Recommended:</em> after the scripting plan, before the emitter. Both are Snips' path to ww, and the engine is pure WinterWolf, which the emitter will later make faster.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user (as recommended): after the scripting plan, before the emitter.</span></div>
+</section>
+</main>
+</body>
+</html>
