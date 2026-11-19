@@ -549,7 +549,7 @@ ObjClass* takeClass(VM& vm, Reader& in, std::string& name) {
     if (cls != nullptr && cls->name->utf8() == name) return cls;
     // A script and its program are two programs, whose globals differ: there a class of the
     // contract both compile (script.cpp) is found by its name.
-    return handleWays != nullptr ? vm.classNamed(name) : nullptr;
+    return handleWays != nullptr ? handleWays->classNamed(vm, name) : nullptr;
 }
 
 // A packed list sent whole (G6): one of the same type here, packed the same way, given the

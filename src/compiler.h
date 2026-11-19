@@ -94,6 +94,12 @@ extern bool compilingPrelude;
 // Reads a whole file; returns false if it cannot be opened. Strips a UTF-8 byte order mark.
 bool readFile(const std::string& path, std::string& out);
 
+// With `alone`, a CompilerSession made on this thread parses the standard library's source on
+// this thread only, not a file a thread as it does otherwise: for one made again and again (a
+// script's, script.cpp), whose helpers' blocks, freed on this thread, would join its pool and
+// leave theirs to take memory anew each time (about 10 MB a compile, 2026-11-19).
+void parsePreludeAlone(bool alone);
+
 // WW_CHECK_NATIVE_RESULTS: every value a function of the C++'s gives is checked against its
 // `external` declaration when the program runs (M6.6 part 1). The standard library is then
 // compiled from its source, and compiled programs are kept apart from the others.
@@ -157,11 +163,12 @@ public:
     // The same with a contract (part 2): its source compiled first, among the script's names, then
     // its proxies and `api` (an object of the interface named `api`, where one is), then the
     // script, then what makes it give the interface named `gives` (where one is). `modules` gets
-    // each of these modules, in the order they are to run.
+    // each of these modules, in the order they are to run; `contractSlots`, where given, the global
+    // slot of each name the contract and its proxies declared among the script's.
     int compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
                       std::unordered_map<std::string, int>& names, const std::string& contractSource,
                       const std::string& contractName, const std::string& api, const std::string& gives,
-                      std::vector<int>& modules);
+                      std::vector<int>& modules, std::unordered_map<std::string, int>* contractSlots = nullptr);
 
     // A file named as a script's contract (Script.compile(..., api = Door#)): checked to be one
     // (it imports nothing and holds only declarations), and its proxies compiled into this program
@@ -176,6 +183,7 @@ public:
 
 private:
     std::unordered_map<std::string, ScriptContract> contracts_;
+    int scriptsCompiled_ = 0;  // compileScript's, for keys of their own
     friend class ModuleCompiler;
 
     VM& vm_;

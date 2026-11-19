@@ -305,6 +305,8 @@ public:
     // Any call of the function it is written in, on the same object; `overridden` when a
     // subclass has one of its own (D29, for `tail fun`).
     bool selfCall(const CallExpr& call, bool& overridden) const;
+    // Script.compile or .load, or ScriptVM's, the standard library's: its api and gives name a contract.
+    bool scriptCompileCall(const CallExpr& call) const;
 
     // A call of an inline function (D59): the function, which parameter each argument goes to,
     // and the file it is written in, whose names its body sees.

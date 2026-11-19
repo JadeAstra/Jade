@@ -1,0 +1,85 @@
+// Scripts sharing one VM (a ScriptVM, asked 2026-11-19): compiled into it as it runs, each with
+// names of its own and its own copy of the contract, run one at a time on its one thread; one
+// stopped alone, the others going on; a compile that fails, the VM going on; the VM stopped,
+// every script in it with it; exit in one, the end of them all.
+import scripts.mods_contract.*
+
+class Game : ModApi {
+  val rooms : open Map<string, RoomType> = {:}
+  val logged : open List<string> = []
+  override fun registerRoomType(id : string, room : RoomType) {
+    rooms[id] = room
+  }
+  override fun spawnShip(kind : string, x : float, y : float) : int => 0
+  override fun giveShip(player : int, ship : int) : bool => true
+  override fun playerShip(player : int) : int? => null
+  override fun shipsOfType(kind : string) : List<int> => []
+  override fun placeShip(ship : int, x : float, y : float) { }
+  override fun log(text : string) {
+    logged.add(text)
+  }
+}
+
+// Two mods, each declaring the same names (english, joined), in one VM.
+fun mod(id : string, colour : string) : string => """
+val english = "$id"
+var joined = 0
+api.registerRoomType("cockpit", RoomType("Cockpit of " + english, "$colour"))
+fun onPlayerJoin(player : int) {
+  joined += 1
+  api.log(english + " saw player " + player + ", " + joined + " so far")
+}
+fun describe() : string => english
+"""
+
+val game = Game()
+val shared = ScriptVM()
+print(shared, shared.isRunning)                                  // expect: ScriptVM true
+val core = shared.compile(mod("core", "#2a9d78"), name = "core.ww", api = ModApi#, gives = ModHooks#).start(api = game)
+val earth = shared.compile(mod("earthlings", "#3355aa"), name = "earthlings.ww", api = ModApi#, gives = ModHooks#).start(api = game)
+val hooks = [core.gives as ModHooks, earth.gives as ModHooks]
+for (h in hooks) { h.onPlayerJoin(1) }
+for (h in hooks) { h.onPlayerJoin(2) }
+for (line in game.logged) { print(line) }
+// expect: core saw player 1, 1 so far
+// expect: earthlings saw player 1, 1 so far
+// expect: core saw player 2, 2 so far
+// expect: earthlings saw player 2, 2 so far
+print(game.rooms["cockpit"], hooks.map { it.describe() })      // expect: RoomType(name="Cockpit of earthlings", color="#3355aa", helm=false) ["core", "earthlings"]
+
+// A script compiled in a ScriptVM starts there once.
+val once = shared.compile("fun one() : int => 1", name = "once.ww")
+print(once.start().call("one"))                                  // expect: 1
+try { once.start() } catch (e : IllegalStateException) { print(e.message) }
+// expect: once.ww has been started in its ScriptVM already: compile it again for another
+
+// One that does not compile leaves the VM as it was; the next compiles.
+try {
+  shared.compile("fun f() : int => \"no\"", name = "bad.ww")
+} catch (e : ScriptError) {
+  print(e.problems[0])                                           // expect: bad.ww:1:18: error: this function gives an int; it cannot return a string
+}
+print(shared.compile("fun two() : int => 2", name = "two.ww").start().call("two"))   // expect: 2
+
+// One stopped alone: no more calls, the others going on.
+core.stop()
+print(core.isRunning, earth.isRunning, shared.isRunning)          // expect: false true true
+try { core.call("describe") } catch (e : ScriptException) { print(e.message) }
+// expect: core.ww: the script is not running
+print(hooks[1].describe())                                       // expect: earthlings
+
+// The VM stopped: every script in it with it.
+shared.stop()
+print(shared.isRunning, earth.isRunning)                         // expect: false false
+try { shared.compile("fun f() : int => 1") } catch (e : IllegalStateException) { print(e.message) }
+// expect: the ScriptVM has been stopped
+
+// exit in one script of a ScriptVM ends the VM, its other scripts with it.
+val second = ScriptVM()
+val bystander = second.compile("fun hello() : string => \"hello\"", name = "bystander.ww").start()
+val quitter = second.compile("fun quit() { exit(0) }", name = "quitter.ww").start()
+print(bystander.call("hello"))                                   // expect: hello
+try { quitter.call("quit") } catch (e : ScriptException) { print(e.message) }
+// expect: quitter.ww: the script ended before it answered
+print(second.isRunning, bystander.isRunning)                     // expect: false false
+print("done")                                                    // expect: done

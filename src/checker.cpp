@@ -8448,7 +8448,10 @@ struct Checker::Impl {
         if (fs.size() == 1) noteSelfCall(fs[0], c);
         if (fs.size() == 1 && fs[0]->isExtension && fs[0]->receiver.nullable) chosenForms[&c] = fs[0];  // as below
         if (fs.size() == 1 && fs[0]->isExtension) extensionCalls[&c] = fs[0];
-        if (fs.size() == 1) return callWith(fs[0], args, c.typeArgs, envOfForm(0), receiver, c, what + "(...)");
+        if (fs.size() == 1) {
+            noteScriptCompile(fs[0], c);
+            return callWith(fs[0], args, c.typeArgs, envOfForm(0), receiver, c, what + "(...)");
+        }
         // Forms with the same receiver and parameters are one form declared in several places:
         // the nearest is the one meant, as for any name.
         std::vector<FuncInfo*> forms;
@@ -8475,7 +8478,10 @@ struct Checker::Impl {
         // where every type's of that name would fit, the program could not choose.
         if (forms.size() == 1 && forms[0]->isExtension && forms[0]->receiver.nullable) chosenForms[&c] = forms[0];
         if (forms.size() == 1 && forms[0]->isExtension) extensionCalls[&c] = forms[0];
-        if (forms.size() == 1) return callWith(forms[0], args, c.typeArgs, formEnvs[0], receiver, c, what + "(...)");
+        if (forms.size() == 1) {
+            noteScriptCompile(forms[0], c);
+            return callWith(forms[0], args, c.typeArgs, formEnvs[0], receiver, c, what + "(...)");
+        }
         size_t index = 0;
         auto envOfChosen = [&](size_t i) -> const Env& { return formEnvs[i]; };
         FuncInfo* f = args.spread ? nullptr : chooseForm(forms, envOfChosen, args, c.typeArgs, receiver, c, what, index);
@@ -8484,6 +8490,7 @@ struct Checker::Impl {
             return unknownType();
         }
         chosenForms[&c] = f;
+        noteScriptCompile(f, c);
         checkInfixCall(f, c);
         noteSelfCall(f, c);
         return callWith(f, args, c.typeArgs, formEnvs[index], receiver, c, what + "(...)");
@@ -8495,6 +8502,15 @@ struct Checker::Impl {
     // A call of it on another receiver, `n.next.last()` in fun Node.last(), or `other.size()` in
     // a method nothing overrides (8.4c): a loop too, which puts the receiver where `this` was.
     std::unordered_map<const CallExpr*, FuncInfo*> selfCallsOn;
+    // Script.compile and Script.load, ScriptVM.compile and ScriptVM.load, the standard library's
+    // (the scripting plan): calls the compiler gives the contract of the interfaces they name.
+    std::unordered_set<const CallExpr*> scriptCompileCalls;
+    void noteScriptCompile(const FuncInfo* f, const CallExpr& c) {
+        if (f == nullptr || f->owner == nullptr || f->unit == nullptr || !f->unit->prelude) return;
+        const std::string& owner = f->owner->name;
+        if ((owner == "Script" || owner == "ScriptVM") && (f->name == "compile" || f->name == "load")) scriptCompileCalls.insert(&c);
+    }
+
     void noteSelfCall(FuncInfo* f, const CallExpr& c) {
         if (silent != 0 || ctx == nullptr || ctx->isLambda || ctx->fn != f || f->decl == nullptr || f->decl->isLambda) return;
         if (c.callee->kind == ExprKind::Member) {
@@ -12866,6 +12882,8 @@ const FunctionDecl* Checker::secondaryConstructor(const CallExpr& call) const {
     auto found = impl_->secondaryCalls.find(&call);
     return found == impl_->secondaryCalls.end() ? nullptr : found->second->decl;
 }
+
+bool Checker::scriptCompileCall(const CallExpr& call) const { return impl_->scriptCompileCalls.count(&call) != 0; }
 
 const FunctionDecl* Checker::chosenForm(const CallExpr& call) const {
     auto found = impl_->chosenForms.find(&call);

@@ -2302,12 +2302,16 @@ private:
 
     void noteScriptContract(const CallExpr& e) {
         if (e.callee->kind != ExprKind::Member || session_.checker == nullptr) return;
-        const auto& member = static_cast<const MemberExpr&>(*e.callee);
-        if ((member.name != "compile" && member.name != "load") || member.object->kind != ExprKind::Name ||
-            static_cast<const NameExpr&>(*member.object).name != "Script")
-            return;
-        auto builtin = session_.builtins_->names.find("Script");
-        if (builtin == session_.builtins_->names.end() || findGlobal("Script", e, true) != &builtin->second) return;
+        // Script.compile(...) as written, or one the checker found to be the standard library's
+        // compile or load of Script or of a ScriptVM (vm.compile(...)).
+        if (!session_.checker->scriptCompileCall(e)) {
+            const auto& member = static_cast<const MemberExpr&>(*e.callee);
+            if ((member.name != "compile" && member.name != "load") || member.object->kind != ExprKind::Name ||
+                static_cast<const NameExpr&>(*member.object).name != "Script")
+                return;
+            auto builtin = session_.builtins_->names.find("Script");
+            if (builtin == session_.builtins_->names.end() || findGlobal("Script", e, true) != &builtin->second) return;
+        }
         const CompilerSession::ScriptContract* contract = nullptr;
         for (size_t i = 0; i < e.args.size(); i++) {
             if ((e.names[i] != "api" && e.names[i] != "gives") || e.args[i]->kind != ExprKind::ClassOf) continue;
@@ -9031,7 +9035,15 @@ std::string CompilerSession::preludeImage() {
     return image + head + code.str();
 }
 
-// The prelude, the same as parseSource gives it, but parsed a file at a time on threads.
+namespace {
+// See parsePreludeAlone (compiler.h).
+thread_local bool preludeAlone = false;
+}  // namespace
+
+void parsePreludeAlone(bool alone) { preludeAlone = alone; }
+
+// The prelude, the same as parseSource gives it, but parsed a file at a time on threads (on
+// this one alone where parsePreludeAlone says so).
 static std::vector<StmtPtr> parsePrelude(const std::string& prelude) {
     PartTimer timed(compileTimes.parse);
     const size_t base = prelude.size() - kStdSourceSize;  // what comes before the standard library's files
@@ -9067,7 +9079,7 @@ static std::vector<StmtPtr> parsePrelude(const std::string& prelude) {
     };
     const size_t cores = std::max(1u, std::thread::hardware_concurrency());
     std::vector<std::thread> threads;
-    for (size_t i = 0; i + 1 < std::min<size_t>({parts.size(), cores, 8}); i++) threads.emplace_back(work);
+    for (size_t i = 0; !preludeAlone && i + 1 < std::min<size_t>({parts.size(), cores, 8}); i++) threads.emplace_back(work);
     work();
     for (std::thread& t : threads) t.join();
     std::vector<StmtPtr> statements;
@@ -9725,13 +9737,15 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
 int CompilerSession::compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
                                    std::unordered_map<std::string, int>& names, const std::string& contractSource,
                                    const std::string& contractName, const std::string& api, const std::string& gives,
-                                   std::vector<int>& modules) {
+                                   std::vector<int>& modules, std::unordered_map<std::string, int>* contractSlots) {
     forgetPaths();
     // What the script imports (a library, a folder of its own) is put back from the units ww keeps
     // compiled where nothing it was made from has changed, and kept so where compiled here: a
     // library is compiled once, for every script and every program that imports it (D145).
     keepingUnits_ = stopAtTypeErrors;
-    const std::string key = "<script>" + name;
+    // Its own keys, however many scripts of the name one session compiles (a ScriptVM's).
+    const std::string suffix = "#" + std::to_string(++scriptsCompiled_);
+    const std::string key = "<script>" + name + suffix;
     std::unique_ptr<Namespace>& ns = namespaces_[key];
     ns = std::make_unique<Namespace>();
     ns->directory = baseDirectory;
@@ -9760,11 +9774,11 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
     try {
         const std::vector<StmtPtr>* contract = nullptr;
         if (!contractSource.empty()) {
-            unit(contractSource, contractName, "<contract>" + contractName);
+            unit(contractSource, contractName, "<contract>" + contractName + suffix);
             contract = sources_.back().get();
             std::string given = contractProxies(*contract);
             if (!api.empty()) given += "internal val api : " + api + " = __scriptApi() as " + api + "\n";
-            unit(given, contractName + " (proxies)", "<script proxies>" + contractName);
+            unit(given, contractName + " (proxies)", "<script proxies>" + contractName + suffix);
         }
         // What the contract and its proxies declared is not the script's own.
         for (const auto& [n, global] : ns->names) contractNames.insert(n);
@@ -9781,7 +9795,7 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
                 return known != ns->names.end() && known->second.declared && contractNames.count(member) == 0;
             });
             if (!why.empty()) throw CompileError(name, 1, 1, why);
-            unit(glue, name + " (as " + gives + ")", "<script gives>" + name);
+            unit(glue, name + " (as " + gives + ")", "<script gives>" + name + suffix);
         }
     } catch (...) {
         globalAssignments_.clear();
@@ -9791,6 +9805,7 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
     }
     for (const auto& [n, global] : ns->names)
         if (global.declared && contractNames.count(n) == 0) names[n] = global.slot;
+        else if (global.declared && contractSlots != nullptr) (*contractSlots)[n] = global.slot;
     keepUnits();
     keepingUnits_ = false;
     program.entry = entry;

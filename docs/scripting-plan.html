@@ -192,7 +192,7 @@ fun onEnter(player : int) {
 <li><strong>The program's:</strong> calls as fast as any, objects shared; but a safe script then shares the program's heap, its stopping is harder, and every object passed is reachable whole.</li>
 </ul>
 <p><em>Recommended:</em> its own, for safe and trusted scripts alike: one design, and the isolation workers already have. A game calls a script a few times a frame, where microseconds do not matter.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): its own VM, for safe and trusted scripts alike, as a worker has.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): its own VM, for safe and trusted scripts alike, as a worker has. Then (the user, 2026-11-19, after the cost of a VM a script was measured: "can we have all scripts run in the same VM? ... so we can choose which vm a script runs in?"): a VM of its own by default, or a <code>ScriptVM</code> the program makes and gives several scripts, which share it and its one copy of the library (0.9.5032).</span></div>
 </section>
 
 <section class="decision">

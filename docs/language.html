@@ -608,6 +608,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ScriptError"><code>ScriptError</code></a> (1)</li>
 <li><a href="#ScriptException"><code>ScriptException</code></a> (1)</li>
 <li><a href="#ScriptProblem"><code>ScriptProblem</code></a> (2)</li>
+<li><a href="#ScriptVM"><code>ScriptVM</code></a> (6)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (6)</li>
@@ -6177,6 +6178,28 @@ fun onEnter(player : int) {
 </div>
 <div class="entry member" id="RunningScript.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#RunningScript.toString">#</a>
 <p>As &quot;RunningScript(door.ww)&quot;.</p>
+</div>
+<div class="entry" id="ScriptVM"><code class="sig">class ScriptVM</code><a class="anchor" href="#ScriptVM">#</a>
+<p>A VM that several scripts share (asked 2026-11-19: &quot;so we can choose which vm a script runs in&quot;): one copy of the standard library and of what they import, for all of them. Each is compiled into it as it runs, by a compiler of its own that lives on its thread (as the shell's does), so a script after the first compiles in a few milliseconds. Its scripts run one at a time, on its one thread, each with names of its own; but they share its fate: one that loops for ever, or calls exit, stops them all. So a game puts its own mods in one, and a script it does not trust in a VM of its own (Script.compile(...).start()).</p>
+<pre>val shared = ScriptVM()
+val core = shared.compile(coreSource, name = &quot;core.ww&quot;, api = ModApi#, gives = ModHooks#).start(api = game)
+val earthlings = shared.compile(earthSource, name = &quot;earthlings.ww&quot;, api = ModApi#, gives = ModHooks#).start(api = game)
+</pre>
+</div>
+<div class="entry member" id="ScriptVM.compile"><code class="sig">fun compile(source : string, name : string = &quot;script.ww&quot;, folder : FilePath? = null, api : Class? = null, gives : Class? = null) : Script throws ScriptError</code><a class="anchor" href="#ScriptVM.compile">#</a>
+<p><code>source</code> compiled into this VM, as Script.compile compiles one of its own; it starts here, once (compile it again for another run).</p>
+</div>
+<div class="entry member" id="ScriptVM.load"><code class="sig">fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError</code><a class="anchor" href="#ScriptVM.load">#</a>
+<p>The file read and compiled into this VM, as Script.load does.</p>
+</div>
+<div class="entry member" id="ScriptVM.stop"><code class="sig">fun stop()</code><a class="anchor" href="#ScriptVM.stop">#</a>
+<p>Stops it, and every script in it, whatever it is doing, and waits until it has ended.</p>
+</div>
+<div class="entry member" id="ScriptVM.isRunning"><code class="sig">val isRunning : bool</code><a class="anchor" href="#ScriptVM.isRunning">#</a>
+<p>True until it is stopped, or ends by itself (a script of it called exit).</p>
+</div>
+<div class="entry member" id="ScriptVM.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#ScriptVM.toString">#</a>
+<p>As &quot;ScriptVM&quot;.</p>
 </div>
 <div class="entry" id="ScriptProblem"><code class="sig">value ScriptProblem(val file : string, val line : int, val column : int, val message : string)</code><a class="anchor" href="#ScriptProblem">#</a>
 <p>One thing wrong with a script that does not compile, and where.</p>

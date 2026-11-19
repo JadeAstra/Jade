@@ -1841,6 +1841,9 @@ struct HandleWays {
     virtual bool give(VM& vm, Value v, int64_t& id, bool& home, bool& function, std::vector<std::string>& interfaces) = 0;
     // What the reader makes of a handle.
     virtual Value take(VM& vm, int64_t id, bool home, bool function, const std::vector<std::string>& interfaces) = 0;
+    // The class a message names where its global's number is another's: of the run's contract,
+    // where it has one of the name (several scripts in one VM each have their own).
+    virtual ObjClass* classNamed(VM& vm, const std::string& name) { return vm.classNamed(name); }
     virtual ~HandleWays() = default;
 };
 extern thread_local HandleWays* handleWays;

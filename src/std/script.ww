@@ -79,26 +79,7 @@ class Script {
     // contract's declarations; with `gives`, another of them, its top-level functions are made
     // an object of that interface, which the program gets from RunningScript.gives.
     fun compile(source : string, name : string = "script.ww", folder : FilePath? = null, api : Class? = null,
-                gives : Class? = null) : Script throws ScriptError {
-      var contract : Pair<string, string>? = null
-      for (named in [api, gives]) {
-        if (named == null) { continue }
-        val found = __scriptContracts[named!!.name]
-        if (found == null) {
-          throw IllegalArgumentException("${named!!.name} is not an interface of a script's contract: name it in the call itself, api = ${named!!.name}#")
-        }
-        contract = found
-      }
-      val made = __script.compile(source, name, (folder ?: FilePath(".")).absolute.toString(), contract?.first ?: "", contract?.second ?: "",
-                                  api?.name ?: "", gives?.name ?: "")
-      if (made is List) {
-        val problems = (made as List<List<any>>).map {
-          ScriptProblem(it[0] as string, it[1] as int, it[2] as int, it[3] as string)
-        }
-        throw ScriptError(problems)
-      }
-      return Script(made, name, api, gives)
-    }
+                gives : Class? = null) : Script throws ScriptError => __scriptCompile(null, source, name, folder, api, gives)
 
     // The file read and compiled, its imports looked for from its folder, as compile does; a
     // ScriptError where it does not compile, an IOException where it cannot be read.
@@ -170,6 +151,47 @@ class RunningScript {
   override fun toString() : string => "RunningScript(${script.name})"
 }
 
+// A VM that several scripts share (asked 2026-11-19: "so we can choose which vm a script runs
+// in"): one copy of the standard library and of what they import, for all of them. Each is
+// compiled into it as it runs, by a compiler of its own that lives on its thread (as the shell's
+// does), so a script after the first compiles in a few milliseconds. Its scripts run one at a
+// time, on its one thread, each with names of its own; but they share its fate: one that loops
+// for ever, or calls exit, stops them all. So a game puts its own mods in one, and a script it
+// does not trust in a VM of its own (Script.compile(...).start()).
+//
+//   val shared = ScriptVM()
+//   val core = shared.compile(coreSource, name = "core.ww", api = ModApi#, gives = ModHooks#).start(api = game)
+//   val earthlings = shared.compile(earthSource, name = "earthlings.ww", api = ModApi#, gives = ModHooks#).start(api = game)
+class ScriptVM {
+  internal val handle : any
+
+  // Starts it: its thread, its VM, the standard library loaded.
+  fun init() {
+    handle = __script.vm()
+  }
+
+  // `source` compiled into this VM, as Script.compile compiles one of its own; it starts here,
+  // once (compile it again for another run).
+  fun compile(source : string, name : string = "script.ww", folder : FilePath? = null, api : Class? = null,
+              gives : Class? = null) : Script throws ScriptError => __scriptCompile(handle, source, name, folder, api, gives)
+
+  // The file read and compiled into this VM, as Script.load does.
+  fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError =>
+    compile(path.readText(), path.name, path.absolute.parent ?: FilePath("."), api, gives)
+
+  // Stops it, and every script in it, whatever it is doing, and waits until it has ended.
+  fun stop() {
+    __script.stopVm(handle)
+  }
+
+  // True until it is stopped, or ends by itself (a script of it called exit).
+  val isRunning : bool
+    get() => __script.vmIsRunning(handle) as bool
+
+  // As "ScriptVM".
+  override fun toString() : string => "ScriptVM"
+}
+
 // One thing wrong with a script that does not compile, and where.
 value ScriptProblem(val file : string, val line : int, val column : int, val message : string) {
   // As the compiler writes it: "door.ww:3:5: error: ...".
@@ -214,3 +236,27 @@ fun __scriptApi() : any => __script.api()
 // What the other side threw, as this side's ScriptException says it: a ScriptException that
 // crossed already said once.
 fun __scriptFailure(text : string) : string => text.startsWith("ScriptException: ") ? text[17 ..< text.size] : text
+
+// Script.compile's and ScriptVM.compile's work: the contract of the interfaces named found (the
+// compiler put it there), and the script compiled, in the ScriptVM `vm` or, where it is null, as
+// a program of its own.
+fun __scriptCompile(vm : any?, source : string, name : string, folder : FilePath?, api : Class?, gives : Class?) : Script throws ScriptError {
+  var contract : Pair<string, string>? = null
+  for (named in [api, gives]) {
+    if (named == null) { continue }
+    val found = __scriptContracts[named!!.name]
+    if (found == null) {
+      throw IllegalArgumentException("${named!!.name} is not an interface of a script's contract: name it in the call itself, api = ${named!!.name}#")
+    }
+    contract = found
+  }
+  val made = __script.compile(vm, source, name, (folder ?: FilePath(".")).absolute.toString(), contract?.first ?: "", contract?.second ?: "",
+                              api?.name ?: "", gives?.name ?: "")
+  if (made is List) {
+    val problems = (made as List<List<any>>).map {
+      ScriptProblem(it[0] as string, it[1] as int, it[2] as int, it[3] as string)
+    }
+    throw ScriptError(problems)
+  }
+  return Script(made, name, api, gives)
+}
