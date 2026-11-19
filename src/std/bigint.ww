@@ -1,0 +1,828 @@
+// ---- Whole numbers of any size (2026-11-19) ----
+// A BigInt is a whole number with no limit to its size: what an int holds and past it, its
+// arithmetic exact however long the numbers grow. It never changes; each operation gives a new
+// one. Written in WinterWolf, its digits held as a list of ints of 30 bits each, lowest first, so
+// that a digit times a digit, and what is carried, always fits in an int.
+//
+//   val big = BigInt.of(2).pow(100)            // 1267650600228229401496703205376
+//   val n = "123456789012345678901234567890".toBigInt()
+//   print(big * n + 7, big / 3, big % 1000, -big < n)
+//
+// It mixes with ints on either side (`5 + big`, `big * 2`, `5 == BigInt.of(5)`), and with floats,
+// which make a float. `/` and `%` cut toward zero, as an int's do (-7 / 2 is -3, -7 % 2 is -1);
+// floorDiv and floorMod round down, as Python's // and % do. The bitwise operators work as if
+// the number were in two's complement with as many bits as it needs, a negative one's ones
+// going on forever (as Python's and Java's do).
+
+// A whole number of any size, exact; each operation gives a new one.
+class BigInt {
+  // -1, 0 or 1.
+  internal val sign : int
+  // The size's digits, 30 bits each, lowest first: none for zero, the highest never 0. Frozen,
+  // so that a BigInt can be a key.
+  internal val mag : FrozenList<int>
+
+  internal fun init(sign : int, mag : List<int>) {
+    this.sign = mag.isEmpty() ? 0 : sign
+    this.mag = mag.frozen()
+  }
+
+  static {
+    // The number `n`.
+    fun of(n : int) : BigInt => __bigOfInt(n)
+    // The whole number `x` is, cut toward zero (2.7 makes 2, -2.7 makes -2), exactly however
+    // large; an ArithmeticException for an infinity or NaN.
+    fun of(x : float) : BigInt => __bigOfFloat(x)
+    // The number `text` writes in base `radix` (2 to 36), a sign first if it has one, and
+    // underscores between digits allowed (1_000_000); a NumberFormatException for anything else.
+    fun parse(text : string, radix : int = 10) : BigInt {
+      val made = __bigParse(text, radix)
+      if (made == null) { throw NumberFormatException("'$text' is not a whole number in base $radix") }
+      return made!!
+    }
+    // The same, null for text that is not one.
+    fun parseOrNull(text : string, radix : int = 10) : BigInt? => __bigParse(text, radix)
+    // 0.
+    val zero : BigInt = BigInt(0, [])
+    // 1.
+    val one : BigInt = BigInt(1, [1])
+    // 2.
+    val two : BigInt = BigInt(1, [2])
+    // 10.
+    val ten : BigInt = BigInt(1, [10])
+  }
+
+  // -1, 0 or 1, as the number is below, at or above zero.
+  val signum : int
+    get() => sign
+  // Whether it is 0.
+  val isZero : bool
+    get() => sign == 0
+  // The bits it needs, not counting a sign: 0 for 0, 1 for 1 and -1, 8 for 255 and -256
+  // (as Java's bitLength: a negative number's in two's complement, its ones not counted).
+  val bitLength : int
+    get() {
+      if (sign == 0) { return 0 }
+      if (sign > 0) { return __bigBits(mag) }
+      return __bigBits(__bigSubMag(mag, [1]))
+    }
+
+  // ---- Arithmetic ----
+
+  // The sum.
+  op +(other : BigInt) : BigInt => __bigAdd(sign, mag, other.sign, other.mag)
+  // The sum with an int.
+  op +(other : int) : BigInt => this + BigInt.of(other)
+  // The sum with a float, as a float.
+  op +(other : float) : float => toFloat() + other
+  // The difference.
+  op -(other : BigInt) : BigInt => __bigAdd(sign, mag, -other.sign, other.mag)
+  // The difference with an int.
+  op -(other : int) : BigInt => this - BigInt.of(other)
+  // The difference with a float, as a float.
+  op -(other : float) : float => toFloat() - other
+  // The number with its sign turned round.
+  op -() : BigInt => BigInt(-sign, mag)
+  // The product.
+  op *(other : BigInt) : BigInt => BigInt(sign * other.sign, __bigMulMag(mag, other.mag))
+  // The product with an int.
+  op *(other : int) : BigInt {
+    // A small int: each digit times it, no BigInt made of it.
+    if (other > -__BIG_BASE and other < __BIG_BASE) {
+      return other < 0 ? BigInt(-sign, __bigMulSmall(mag, -other)) : BigInt(sign, __bigMulSmall(mag, other))
+    }
+    return this * BigInt.of(other)
+  }
+  // The product with a float, as a float.
+  op *(other : float) : float => toFloat() * other
+  // Cut toward zero, as an int's; an ArithmeticException for 0.
+  op /(other : BigInt) : BigInt => divRem(other).first
+  // Divided by an int, cut toward zero.
+  op /(other : int) : BigInt {
+    if (other > 0 and other < __BIG_BASE) { return BigInt(sign, __bigDivSmall(mag, other)[0] as List<int>) }
+    return this / BigInt.of(other)
+  }
+  // Divided by a float, as a float.
+  op /(other : float) : float => toFloat() / other
+  // The rest, with the sign of the number divided, as an int's; an ArithmeticException for 0.
+  op %(other : BigInt) : BigInt => divRem(other).second
+  // The rest after dividing by an int, with the sign of this number.
+  op %(other : int) : BigInt {
+    if (other > 0 and other < __BIG_BASE) { return BigInt.of(sign * (__bigDivSmall(mag, other)[1] as int)) }
+    return this % BigInt.of(other)
+  }
+
+  // The quotient cut toward zero and the rest, in one division.
+  fun divRem(by : BigInt) : Pair<BigInt, BigInt> {
+    if (by.sign == 0) { throw ArithmeticException("a BigInt divided by zero") }
+    if (__bigCmpMag(mag, by.mag) < 0) { return Pair(BigInt.zero, this) }
+    val parts = __bigDivMag(mag, by.mag)
+    return Pair(BigInt(sign * by.sign, parts[0]), BigInt(sign, parts[1]))
+  }
+  // Divided and rounded down (toward minus infinity), as Python's //.
+  fun floorDiv(by : BigInt) : BigInt {
+    val (q, r) = divRem(by)
+    return r.sign != 0 and r.sign != by.sign ? q - 1 : q
+  }
+  // floorDiv by an int.
+  fun floorDiv(by : int) : BigInt => floorDiv(BigInt.of(by))
+  // The rest after floorDiv, with the sign of `by`, as Python's %.
+  fun floorMod(by : BigInt) : BigInt {
+    val r = divRem(by).second
+    return r.sign != 0 and r.sign != by.sign ? r + by : r
+  }
+  // floorMod by an int.
+  fun floorMod(by : int) : BigInt => floorMod(BigInt.of(by))
+
+  // Its size, the sign dropped.
+  fun abs() : BigInt => sign < 0 ? BigInt(1, mag) : this
+  // To the power `exponent`, 0 or more (anything to the 0 is 1).
+  fun pow(exponent : int) : BigInt {
+    if (exponent < 0) { throw ArithmeticException("a BigInt to a negative power ($exponent) is no whole number") }
+    var result = BigInt.one
+    var square = this
+    var e = exponent
+    while (e > 0) {
+      if ((e & 1) == 1) { result = result * square }
+      e = e >> 1
+      if (e > 0) { square = square * square }
+    }
+    return result
+  }
+  // The greatest whole number dividing both, never negative; gcd(0, 0) is 0.
+  fun gcd(other : BigInt) : BigInt {
+    var a = abs()
+    var b = other.abs()
+    while (!b.isZero) {
+      val r = a % b
+      a = b
+      b = r
+    }
+    return a
+  }
+  // gcd with an int.
+  fun gcd(other : int) : BigInt => gcd(BigInt.of(other))
+  // To the power `exponent` (0 or more), all modulo `modulus` (above 0): the result 0 or more and
+  // below it, worked out without the whole power.
+  fun modPow(exponent : BigInt, modulus : BigInt) : BigInt {
+    if (modulus.sign <= 0) { throw ArithmeticException("a modulus is above zero, not $modulus") }
+    if (exponent.sign < 0) { throw ArithmeticException("modPow takes an exponent of 0 or more, not $exponent") }
+    var result = BigInt.one.floorMod(modulus)
+    var base = floorMod(modulus)
+    val bits = exponent.bitLength
+    for (i in 0 ..< bits) {
+      if (exponent.testBit(i)) { result = (result * base).floorMod(modulus) }
+      if (i + 1 < bits) { base = (base * base).floorMod(modulus) }
+    }
+    return result
+  }
+  // modPow with an int exponent.
+  fun modPow(exponent : int, modulus : BigInt) : BigInt => modPow(BigInt.of(exponent), modulus)
+  // The number that, times this, is 1 modulo `modulus`; an ArithmeticException where there is
+  // none (they share a divisor).
+  fun modInverse(modulus : BigInt) : BigInt {
+    if (modulus.sign <= 0) { throw ArithmeticException("a modulus is above zero, not $modulus") }
+    var oldR = floorMod(modulus)
+    var r = modulus
+    var oldS = BigInt.one
+    var s = BigInt.zero
+    while (!r.isZero) {
+      val q = oldR / r
+      val nextR = oldR - q * r
+      oldR = r
+      r = nextR
+      val nextS = oldS - q * s
+      oldS = s
+      s = nextS
+    }
+    if (oldR != BigInt.one) { throw ArithmeticException("$this has no inverse modulo $modulus") }
+    return oldS.floorMod(modulus)
+  }
+  // The whole part of its square root: the largest whole number whose square is not above it;
+  // an ArithmeticException for a negative number.
+  fun sqrt() : BigInt {
+    if (sign < 0) { throw ArithmeticException("a negative number ($this) has no square root") }
+    if (sign == 0) { return this }
+    // Newton's way, from a guess above the root, down until it stops falling.
+    var x = BigInt.one << ((bitLength + 1) / 2)
+    while (true) {
+      val y = (x + this / x) >> 1
+      if (y >= x) { return x }
+      x = y
+    }
+  }
+
+  // ---- Bits ----
+
+  // Moved up `by` bits (times 2 to that power); a negative `by` moves it down.
+  op <<(by : int) : BigInt {
+    if (by < 0) { return this >> -by }
+    if (sign == 0 or by == 0) { return this }
+    return BigInt(sign, __bigShlMag(mag, by))
+  }
+  // Moved down `by` bits, rounded down (toward minus infinity), as an int's >> is.
+  op >>(by : int) : BigInt {
+    if (by < 0) { return this << -by }
+    if (sign == 0 or by == 0) { return this }
+    if (sign > 0) { return BigInt(1, __bigShrMag(mag, by)) }
+    // -((|x| - 1) >> by) - 1
+    return BigInt(-1, __bigAddMag(__bigShrMag(__bigSubMag(mag, [1]), by), [1]))
+  }
+  // The bits set in both, in two's complement.
+  op &(other : BigInt) : BigInt => __bigBitwise(this, other, 0)
+  // & with an int.
+  op &(other : int) : BigInt => this & BigInt.of(other)
+  // The bits set in either, in two's complement.
+  op |(other : BigInt) : BigInt => __bigBitwise(this, other, 1)
+  // | with an int.
+  op |(other : int) : BigInt => this | BigInt.of(other)
+  // The bits set in one but not both, in two's complement.
+  op ^(other : BigInt) : BigInt => __bigBitwise(this, other, 2)
+  // ^ with an int.
+  op ^(other : int) : BigInt => this ^ BigInt.of(other)
+  // Every bit turned round: -this - 1.
+  op ~() : BigInt => -this - 1
+  // Whether bit `n` (0 the lowest) is set, in two's complement.
+  fun testBit(n : int) : bool {
+    if (n < 0) { throw IllegalArgumentException("a bit's place is 0 or more, not $n") }
+    return ((this >> n).lowDigit() & 1) == 1
+  }
+  // The lowest 30 bits of its two's complement.
+  internal fun lowDigit() : int {
+    if (sign == 0) { return 0 }
+    val low = mag[0]
+    return sign > 0 ? low : (__BIG_BASE - low) & __BIG_MASK
+  }
+
+  // ---- Comparing ----
+
+  // -1, 0 or 1, as it is below, equal to or above `other`.
+  fun compareTo(other : BigInt) : int {
+    if (sign != other.sign) { return sign < other.sign ? -1 : 1 }
+    val c = __bigCmpMag(mag, other.mag)
+    return sign >= 0 ? c : -c
+  }
+  // compareTo an int.
+  fun compareTo(other : int) : int => compareTo(BigInt.of(other))
+  // Whether it is below `other`.
+  op <(other : BigInt) : bool => compareTo(other) < 0
+  // Whether it is below the int.
+  op <(other : int) : bool => compareTo(other) < 0
+  // Whether it is below `other` or equal.
+  op <=(other : BigInt) : bool => compareTo(other) <= 0
+  // Whether it is below the int or equal.
+  op <=(other : int) : bool => compareTo(other) <= 0
+  // Whether it is above `other`.
+  op >(other : BigInt) : bool => compareTo(other) > 0
+  // Whether it is above the int.
+  op >(other : int) : bool => compareTo(other) > 0
+  // Whether it is above `other` or equal.
+  op >=(other : BigInt) : bool => compareTo(other) >= 0
+  // Whether it is above the int or equal.
+  op >=(other : int) : bool => compareTo(other) >= 0
+  // Equal to a BigInt, an int or a float of the same whole value (exactly: no float rounding).
+  op ==(other : any?) : bool {
+    if (other is BigInt) { return compareTo(other as BigInt) == 0 }
+    if (other is int) { return compareTo(other as int) == 0 }
+    if (other is float) {
+      val x = other as float
+      if (x.isNaN() or x.isInfinite() or x % 1.0 != 0.0) { return false }
+      return compareTo(BigInt.of(x)) == 0
+    }
+    return false
+  }
+  // Equal to an int's where it is one, so that BigInt.of(5) and 5 find each other as keys.
+  fun hashCode() : int {
+    val small = toIntOrNull()
+    if (small != null) { return small!!.hashCode() }
+    var h = sign
+    for (d in mag) { h = (h &* 31) &+ d }
+    return h
+  }
+
+  // ---- Into other kinds ----
+
+  // As an int; an ArithmeticException where it does not fit.
+  fun toInt() : int {
+    val small = toIntOrNull()
+    if (small == null) { throw ArithmeticException("$this does not fit in an int") }
+    return small!!
+  }
+  // As an int, null where it does not fit.
+  fun toIntOrNull() : int? {
+    if (sign == 0) { return 0 }
+    if (mag.size > 3) { return null }
+    // At most 90 bits: 63 fit, and -2^63.
+    if (mag.size == 3 and mag[2] >= 8) {
+      return sign < 0 and mag[2] == 8 and mag[1] == 0 and mag[0] == 0 ? -9223372036854775807 - 1 : null
+    }
+    var v = 0
+    for (i in mag.size - 1 downTo 0) { v = (v << 30) | mag[i] }
+    return sign * v
+  }
+  // Whether it fits in an int.
+  val fitsInt : bool
+    get() => toIntOrNull() != null
+  // The nearest float, rounded as the processor rounds (to even where halfway); an infinity
+  // past the largest.
+  fun toFloat() : float {
+    val small = toIntOrNull()
+    if (small != null) { return small!!.toFloat() }
+    // The highest 63 bits as an int, the lowest of them set where anything below them is (so that
+    // the int's rounding to 53 bits rounds as the whole number would), times 2 to what was cut.
+    val bits = __bigBits(mag)
+    val cut = bits - 63
+    val top = __bigShrMag(mag, cut)
+    var high = 0
+    for (i in top.size - 1 downTo 0) { high = (high << 30) | top[i] }
+    if (__bigAnyBelow(mag, cut)) { high = high | 1 }
+    val x = high.toFloat() * __bigTwoTo(cut)
+    return sign < 0 ? -x : x
+  }
+  // In base `radix`, 2 to 36 (digits past 9 in small letters), a minus first where negative.
+  fun toString(radix : int) : string => __bigToString(this, radix)
+  // In base 10, a minus first where negative.
+  fun toString() : string => __bigToString(this, 10)
+}
+
+// Into a BigInt.
+fun int.toBigInt() : BigInt => BigInt.of(this)
+// The whole number the float is, cut toward zero; an ArithmeticException for an infinity or NaN.
+fun float.toBigInt() : BigInt => BigInt.of(this)
+// The number the text writes in base `radix`; a NumberFormatException for anything else.
+fun string.toBigInt(radix : int = 10) : BigInt => BigInt.parse(this, radix)
+// The number the text writes in base `radix`, null for anything else.
+fun string.toBigIntOrNull(radix : int = 10) : BigInt? => BigInt.parseOrNull(this, radix)
+
+// An int or a float on the left of a BigInt.
+op int.+(other : BigInt) : BigInt => BigInt.of(this) + other
+// The int less a BigInt.
+op int.-(other : BigInt) : BigInt => BigInt.of(this) - other
+// The int times a BigInt.
+op int.*(other : BigInt) : BigInt => BigInt.of(this) * other
+// The int divided by a BigInt, cut toward zero.
+op int./(other : BigInt) : BigInt => BigInt.of(this) / other
+// The rest after dividing the int by a BigInt.
+op int.%(other : BigInt) : BigInt => BigInt.of(this) % other
+// Whether the int is below the BigInt.
+op int.<(other : BigInt) : bool => other.compareTo(this) > 0
+// Whether the int is below the BigInt or equal.
+op int.<=(other : BigInt) : bool => other.compareTo(this) >= 0
+// Whether the int is above the BigInt.
+op int.>(other : BigInt) : bool => other.compareTo(this) < 0
+// Whether the int is above the BigInt or equal.
+op int.>=(other : BigInt) : bool => other.compareTo(this) <= 0
+// The float plus a BigInt, as a float.
+op float.+(other : BigInt) : float => this + other.toFloat()
+// The float less a BigInt, as a float.
+op float.-(other : BigInt) : float => this - other.toFloat()
+// The float times a BigInt, as a float.
+op float.*(other : BigInt) : float => this * other.toFloat()
+// The float divided by a BigInt, as a float.
+op float./(other : BigInt) : float => this / other.toFloat()
+
+// ---- How it is worked out ----
+
+val __BIG_BASE = 1073741824   // 2^30
+val __BIG_MASK = 1073741823
+
+// A list of digits with the zeros at its top taken off.
+fun __bigTrim(d : open List<int>) : List<int> {
+  while (d.isNotEmpty() and d.last() == 0) { d.removeLast() }
+  return d
+}
+
+fun __bigOfInt(n : int) : BigInt {
+  if (n == 0) { return BigInt.zero }
+  // -2^63 has no int of its size: 2^63 is 8 times 2^60.
+  if (n == -9223372036854775807 - 1) { return BigInt(-1, [0, 0, 8]) }
+  var v = n < 0 ? -n : n
+  val d : open List<int> = []
+  while (v > 0) {
+    d.add(v & __BIG_MASK)
+    v = v >> 30
+  }
+  return BigInt(n < 0 ? -1 : 1, d)
+}
+
+// Exactly, cut toward zero: the float's whole part a digit at a time from the top, each step a
+// multiplication or a division by a power of two, which floats do without rounding.
+fun __bigOfFloat(x : float) : BigInt {
+  if (x.isNaN() or x.isInfinite()) { throw ArithmeticException("$x is no whole number") }
+  var f = x < 0.0 ? -x : x
+  f = f - f % 1.0
+  if (f < 4.0e18) { return BigInt.of(x < 0.0 ? -(f.toInt()) : f.toInt()) }
+  var levels = 0
+  while (f >= 1073741824.0) {
+    f = f / 1073741824.0
+    levels += 1
+  }
+  val d : open List<int> = List(levels + 1) { 0 }
+  for (k in levels downTo 0) {
+    val whole = f - f % 1.0
+    d[k] = whole.toInt()
+    f = (f - whole) * 1073741824.0
+  }
+  return BigInt(x < 0.0 ? -1 : 1, __bigTrim(d))
+}
+
+// The bits of the highest digit and those below: a size's bit length.
+fun __bigBits(d : List<int>) : int {
+  if (d.isEmpty()) { return 0 }
+  var top = d.last()
+  var bits = 0
+  while (top > 0) {
+    bits += 1
+    top = top >> 1
+  }
+  return (d.size - 1) * 30 + bits
+}
+
+// Whether any of the lowest `count` bits is set.
+fun __bigAnyBelow(d : List<int>, count : int) : bool {
+  val whole = count / 30
+  for (i in 0 ..< Math.min(whole, d.size)) { if (d[i] != 0) { return true } }
+  val part = count % 30
+  return part > 0 and whole < d.size and (d[whole] & ((1 << part) - 1)) != 0
+}
+
+// 2 to the power `e` as a float, exactly (an infinity past the largest).
+fun __bigTwoTo(e : int) : float {
+  var x = 1.0
+  var left = e
+  while (left >= 1000) {
+    x = x * 1.0715086071862673e301   // 2^1000
+    left -= 1000
+  }
+  while (left >= 30) {
+    x = x * 1073741824.0
+    left -= 30
+  }
+  return x * (1 << left).toFloat()
+}
+
+// -1, 0 or 1, comparing two sizes.
+fun __bigCmpMag(a : List<int>, b : List<int>) : int {
+  if (a.size != b.size) { return a.size < b.size ? -1 : 1 }
+  var i = a.size - 1
+  while (i >= 0) {
+    val x = a[i]
+    val y = b[i]
+    if (x != y) { return x < y ? -1 : 1 }
+    i -= 1
+  }
+  return 0
+}
+
+fun __bigAddMag(a : List<int>, b : List<int>) : List<int> {
+  val (long, short) = a.size >= b.size ? Pair(a, b) : Pair(b, a)
+  val out : open List<int> = List(long.size + 1) { 0 }
+  var carry = 0
+  for (i in 0 ..< long.size) {
+    val s = long[i] + (i < short.size ? short[i] : 0) + carry
+    out[i] = s & __BIG_MASK
+    carry = s >> 30
+  }
+  out[long.size] = carry
+  return __bigTrim(out)
+}
+
+// a - b, where a is not below b.
+fun __bigSubMag(a : List<int>, b : List<int>) : List<int> {
+  val out : open List<int> = List(a.size) { 0 }
+  var borrow = 0
+  for (i in 0 ..< a.size) {
+    var s = a[i] - (i < b.size ? b[i] : 0) - borrow
+    if (s < 0) {
+      s += __BIG_BASE
+      borrow = 1
+    } else {
+      borrow = 0
+    }
+    out[i] = s
+  }
+  return __bigTrim(out)
+}
+
+fun __bigAdd(sa : int, a : List<int>, sb : int, b : List<int>) : BigInt {
+  if (sb == 0) { return BigInt(sa, a) }
+  if (sa == 0) { return BigInt(sb, b) }
+  if (sa == sb) { return BigInt(sa, __bigAddMag(a, b)) }
+  val c = __bigCmpMag(a, b)
+  if (c == 0) { return BigInt.zero }
+  return c > 0 ? BigInt(sa, __bigSubMag(a, b)) : BigInt(sb, __bigSubMag(b, a))
+}
+
+// Long multiplication; Karatsuba's way where both are long (each half times each half three
+// times, not four), from 48 digits.
+fun __bigMulMag(a : List<int>, b : List<int>) : List<int> {
+  if (a.isEmpty() or b.isEmpty()) { return [] }
+  if (a.size >= 48 and b.size >= 48) { return __bigKaratsuba(a, b) }
+  val out : open List<int> = List(a.size + b.size) { 0 }
+  for (i in 0 ..< a.size) {
+    val x = a[i]
+    if (x == 0) { continue }
+    var carry = 0
+    for (j in 0 ..< b.size) {
+      val t = out[i + j] + x * b[j] + carry
+      out[i + j] = t & __BIG_MASK
+      carry = t >> 30
+    }
+    var k = i + b.size
+    while (carry != 0) {
+      val t = out[k] + carry
+      out[k] = t & __BIG_MASK
+      carry = t >> 30
+      k += 1
+    }
+  }
+  return __bigTrim(out)
+}
+
+fun __bigKaratsuba(a : List<int>, b : List<int>) : List<int> {
+  val half = Math.max(a.size, b.size) / 2
+  val aLow = __bigTrim(a[0 ..< Math.min(half, a.size)].toOpenList())
+  val aHigh = a.size > half ? a[half ..< a.size] : []
+  val bLow = __bigTrim(b[0 ..< Math.min(half, b.size)].toOpenList())
+  val bHigh = b.size > half ? b[half ..< b.size] : []
+  val low = __bigMulMag(aLow, bLow)
+  val high = __bigMulMag(aHigh, bHigh)
+  val middle = __bigSubMag(__bigSubMag(__bigMulMag(__bigAddMag(aLow, aHigh), __bigAddMag(bLow, bHigh)), low), high)
+  return __bigAddMag(__bigAddMag(low, __bigShiftDigits(middle, half)), __bigShiftDigits(high, 2 * half))
+}
+
+// Times the base to the power `n`: `n` zero digits put under it.
+fun __bigShiftDigits(d : List<int>, n : int) : List<int> {
+  if (d.isEmpty()) { return d }
+  val out : open List<int> = List(n) { 0 }
+  out.addAll(d)
+  return out
+}
+
+fun __bigShlMag(d : List<int>, by : int) : List<int> {
+  val whole = by / 30
+  val part = by % 30
+  val out : open List<int> = List(whole + d.size + 1) { 0 }
+  if (part == 0) {
+    for (i in 0 ..< d.size) { out[whole + i] = d[i] }
+  } else {
+    var carry = 0
+    for (i in 0 ..< d.size) {
+      val v = d[i]
+      out[whole + i] = ((v << part) & __BIG_MASK) | carry
+      carry = v >> (30 - part)
+    }
+    out[whole + d.size] = carry
+  }
+  return __bigTrim(out)
+}
+
+fun __bigShrMag(d : List<int>, by : int) : List<int> {
+  val whole = by / 30
+  val part = by % 30
+  if (whole >= d.size) { return [] }
+  val out : open List<int> = List(d.size - whole) { 0 }
+  for (i in 0 ..< out.size) {
+    val low = d[whole + i] >> part
+    val high = part > 0 and whole + i + 1 < d.size ? (d[whole + i + 1] << (30 - part)) & __BIG_MASK : 0
+    out[i] = low | high
+  }
+  return __bigTrim(out)
+}
+
+// A size divided by a digit: [the quotient, the rest].
+fun __bigDivSmall(a : List<int>, by : int) : List<any> {
+  val q : open List<int> = List(a.size) { 0 }
+  var r = 0
+  var i = a.size - 1
+  while (i >= 0) {
+    val t = (r << 30) | a[i]
+    q[i] = t / by
+    r = t % by
+    i -= 1
+  }
+  return [__bigTrim(q), r]
+}
+
+// Two sizes divided, the divisor not above the dividend: [the quotient, the rest] (Knuth's
+// algorithm D, The Art of Computer Programming, 4.3.1).
+fun __bigDivMag(a : List<int>, b : List<int>) : List<List<int>> {
+  if (b.size == 1) {
+    val parts = __bigDivSmall(a, b[0])
+    val r = parts[1] as int
+    return [parts[0] as List<int>, r == 0 ? [] : [r]]
+  }
+  // Both moved up until the divisor's highest digit has its top bit (29) set.
+  val s = 30 - __bigBits([b.last()])
+  val v = __bigShlMag(b, s)
+  val u : open List<int> = __bigShlMag(a, s).toOpenList()
+  while (u.size < a.size + 1) { u.add(0) }
+  val n = v.size
+  val m = u.size - n - 1
+  val q : open List<int> = List(m + 1) { 0 }
+  val vTop = v[n - 1]
+  val vNext = v[n - 2]
+  var j = m
+  while (j >= 0) {
+    // The quotient's next digit guessed from the top two of what is left, then corrected.
+    val num = (u[j + n] << 30) | u[j + n - 1]
+    var qhat = num / vTop
+    var rhat = num % vTop
+    while (qhat >= __BIG_BASE or qhat * vNext > ((rhat << 30) | u[j + n - 2])) {
+      qhat -= 1
+      rhat += vTop
+      if (rhat >= __BIG_BASE) { break }
+    }
+    // Taken away: u[j ..< j + n + 1] -= qhat * v.
+    var borrow = 0
+    var carry = 0
+    for (i in 0 ..< n) {
+      val p = qhat * v[i] + carry
+      carry = p >> 30
+      val t = u[i + j] - (p & __BIG_MASK) - borrow
+      if (t < 0) {
+        u[i + j] = t + __BIG_BASE
+        borrow = 1
+      } else {
+        u[i + j] = t
+        borrow = 0
+      }
+    }
+    val top = u[j + n] - carry - borrow
+    if (top < 0) {
+      // Once in a while the guess is one too many: v added back.
+      u[j + n] = top + __BIG_BASE
+      qhat -= 1
+      var c = 0
+      for (i in 0 ..< n) {
+        val t = u[i + j] + v[i] + c
+        u[i + j] = t & __BIG_MASK
+        c = t >> 30
+      }
+      u[j + n] = (u[j + n] + c) & __BIG_MASK
+    } else {
+      u[j + n] = top
+    }
+    q[j] = qhat
+    j -= 1
+  }
+  val rest = __bigShrMag(__bigTrim(u[0 ..< n].toOpenList()), s)
+  return [__bigTrim(q), rest]
+}
+
+// &, | and ^ (0, 1, 2) on the two numbers' two's complements, as long as the longer and one
+// more digit, whose top bit is the sign.
+fun __bigBitwise(x : BigInt, y : BigInt, op : int) : BigInt {
+  val length = Math.max(x.mag.size, y.mag.size) + 1
+  val a = __bigTwos(x, length)
+  val b = __bigTwos(y, length)
+  val out : open List<int> = List(length) { 0 }
+  for (i in 0 ..< length) {
+    out[i] = op == 0 ? a[i] & b[i] : op == 1 ? a[i] | b[i] : a[i] ^ b[i]
+  }
+  val negative = (out[length - 1] >> 29) == 1
+  if (!negative) { return BigInt(1, __bigTrim(out)) }
+  // Its size: every bit turned round, then one added.
+  for (i in 0 ..< length) { out[i] = __BIG_MASK - out[i] }
+  return BigInt(-1, __bigAddMag(__bigTrim(out), [1]))
+}
+
+// A number's two's complement in `length` digits: a negative one's size less one, each bit turned.
+fun __bigTwos(x : BigInt, length : int) : List<int> {
+  val out : open List<int> = List(length) { 0 }
+  if (x.sign >= 0) {
+    for (i in 0 ..< x.mag.size) { out[i] = x.mag[i] }
+    return out
+  }
+  val less = __bigSubMag(x.mag, [1])
+  for (i in 0 ..< length) { out[i] = __BIG_MASK - (i < less.size ? less[i] : 0) }
+  return out
+}
+
+fun __bigDigitValue(c : char) : int {
+  val code = c.code
+  if (code >= 48 and code <= 57) { return code - 48 }
+  if (code >= 97 and code <= 122) { return code - 87 }
+  if (code >= 65 and code <= 90) { return code - 55 }
+  return 99
+}
+
+// The largest power of `radix` a digit holds, and how many of the radix's digits that is.
+fun __bigChunk(radix : int) : List<int> {
+  var power = radix
+  var count = 1
+  while (power * radix < __BIG_BASE) {
+    power = power * radix
+    count += 1
+  }
+  return [power, count]
+}
+
+fun __bigParse(text : string, radix : int) : BigInt? {
+  if (radix < 2 or radix > 36) { throw IllegalArgumentException("a base is 2 to 36, not $radix") }
+  var i = 0
+  var negative = false
+  if (text.size > 0 and (text[0] == '-' or text[0] == '+')) {
+    negative = text[0] == '-'
+    i = 1
+  }
+  // The digits, underscores between them dropped.
+  val digits : open List<int> = []
+  var lastWasDigit = false
+  while (i < text.size) {
+    val c = text[i]
+    if (c == '_') {
+      if (!lastWasDigit or i + 1 >= text.size) { return null }
+      lastWasDigit = false
+    } else {
+      val v = __bigDigitValue(c)
+      if (v >= radix) { return null }
+      digits.add(v)
+      lastWasDigit = true
+    }
+    i += 1
+  }
+  if (digits.isEmpty() or !lastWasDigit) { return null }
+  val chunk = __bigChunk(radix)
+  val power = chunk[0]
+  val per = chunk[1]
+  // A chunk of the radix's digits at a time, each as large as a digit holds.
+  val mag : open List<int> = []
+  var at = 0
+  val first = digits.size % per
+  while (at < digits.size) {
+    val take = at == 0 and first > 0 ? first : per
+    var value = 0
+    var scale = 1
+    for (k in 0 ..< take) {
+      value = value * radix + digits[at + k]
+      scale = scale * radix
+    }
+    __bigMulAddInPlace(mag, scale, value)
+    at += take
+  }
+  return BigInt(negative ? -1 : 1, __bigTrim(mag))
+}
+
+// A size times a digit.
+fun __bigMulSmall(a : List<int>, by : int) : List<int> {
+  if (a.isEmpty() or by == 0) { return [] }
+  val out : open List<int> = List(a.size + 1) { 0 }
+  var carry = 0
+  for (i in 0 ..< a.size) {
+    val t = a[i] * by + carry
+    out[i] = t & __BIG_MASK
+    carry = t >> 30
+  }
+  out[a.size] = carry
+  return __bigTrim(out)
+}
+
+fun __bigToString(x : BigInt, radix : int) : string {
+  if (radix < 2 or radix > 36) { throw IllegalArgumentException("a base is 2 to 36, not $radix") }
+  if (x.sign == 0) { return "0" }
+  val chunk = __bigChunk(radix)
+  val power = chunk[0]
+  val per = chunk[1]
+  // The number divided by the largest power of the radix a digit holds, again and again: its
+  // rests are its chunks of `per` digits, lowest first.
+  val parts : open List<int> = []
+  val left : open List<int> = x.mag.toOpenList()
+  while (left.isNotEmpty()) {
+    parts.add(__bigDivSmallInPlace(left, power))
+  }
+  val text = StringBuilder()
+  if (x.sign < 0) { text.append("-") }
+  text.append(parts.last().toString(radix))
+  var i = parts.size - 2
+  while (i >= 0) {
+    text.append(parts[i].toString(radix).padStart(per, '0'))
+    i -= 1
+  }
+  return text.toString()
+}
+
+// d = d * by + add, in place: by and add below the base.
+fun __bigMulAddInPlace(d : open List<int>, by : int, add : int) {
+  var carry = add
+  for (i in 0 ..< d.size) {
+    val t = d[i] * by + carry
+    d[i] = t & __BIG_MASK
+    carry = t >> 30
+  }
+  if (carry != 0) { d.add(carry) }
+}
+
+// d = d / by, in place, its top zeros taken off: the rest. `by` is above 0 and below the base.
+fun __bigDivSmallInPlace(d : open List<int>, by : int) : int {
+  var r = 0
+  var i = d.size - 1
+  while (i >= 0) {
+    val t = (r << 30) | d[i]
+    d[i] = t / by
+    r = t % by
+    i -= 1
+  }
+  __bigTrim(d)
+  return r
+}

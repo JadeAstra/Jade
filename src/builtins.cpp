@@ -581,6 +581,14 @@ void registerMath(VM& vm) {
     WW_MATH_UNARY("acos", std::acos);
     WW_MATH_UNARY("atan", std::atan);
     WW_MATH_UNARY("trunc", std::trunc);
+    WW_MATH_UNARY("sinh", std::sinh);
+    WW_MATH_UNARY("cosh", std::cosh);
+    WW_MATH_UNARY("tanh", std::tanh);
+    WW_MATH_UNARY("asinh", std::asinh);
+    WW_MATH_UNARY("acosh", std::acosh);
+    WW_MATH_UNARY("atanh", std::atanh);
+    WW_MATH_UNARY("expm1", std::expm1);
+    WW_MATH_UNARY("log1p", std::log1p);
 #undef WW_MATH_UNARY
 
     // The logarithm in a base given, as Kotlin's log(x, base): NaN for a base of 1 or not above 0.

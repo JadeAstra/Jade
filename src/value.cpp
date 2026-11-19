@@ -334,6 +334,14 @@ bool keysEqual(const Value& a, const Value& b, int depth) {
             if (keyMethods->equalOf(cls, a, b, same)) return same;
         }
     }
+    // A plain key looked for with such an object, or found beside one: the object's == says, as
+    // `5 == BigInt.of(5)` asks BigInt's (2026-11-19).
+    if (mayOwnKeys(b) && !mayOwnKeys(a) && keyMethods != nullptr) {
+        if (const ObjClass* cls = keyClassOf(b)) {
+            bool same = false;
+            if (keyMethods->equalOf(cls, b, a, same)) return same;
+        }
+    }
     // Values of value types, whatever form each is in (M6.6 part 5).
     if ((a.isSmall() || b.isSmall() || a.isRef() || b.isRef()) && depth < kMaxKeyDepth) {
         const ObjClass *ca = nullptr, *cb = nullptr;

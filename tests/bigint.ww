@@ -1,0 +1,110 @@
+// BigInt (2026-11-19): whole numbers of any size, exact, mixed with ints on either side. The
+// large results were worked out by Python's int; the identities below check the algorithms
+// (long and Karatsuba multiplication, Knuth's division) on numbers of every length.
+
+// ---- Made, written, read ----
+val big = BigInt.of(2).pow(100)
+print(big)                                   // expect: 1267650600228229401496703205376
+print(big.toString(16), big.bitLength)       // expect: 10000000000000000000000000 101
+print("123456789012345678901234567890".toBigInt() + 10)   // expect: 123456789012345678901234567900
+print(BigInt.parse("zz_zz", 36), BigInt.parse("-1010", 2), "+77".toBigInt())   // expect: 1679615 -10 77
+print(BigInt.of(255).pow(9).toString(8))     // expect: 756216543730112367004377
+print(BigInt.parseOrNull("12x"), "1__0".toBigIntOrNull(), "_1".toBigIntOrNull(), "".toBigIntOrNull(), "-".toBigIntOrNull())   // expect: null null null null null
+print(BigInt.of(-9223372036854775807 - 1), BigInt.of(9223372036854775807) + 1)   // expect: -9223372036854775808 9223372036854775808
+print(BigInt.of(1e30), BigInt.of(-2.7), 5.toBigInt(), 2.5e20.toBigInt())   // expect: 1000000000000000019884624838656 -2 5 250000000000000000000
+print(BigInt.zero, BigInt.one, BigInt.two, BigInt.ten, -BigInt.zero)   // expect: 0 1 2 10 0
+
+// ---- Arithmetic, mixed with ints ----
+print(big * 3 + 7, 5 + big, 5 - big, 2 * big == big + big)   // expect: 3802951800684688204490109616135 1267650600228229401496703205381 -1267650600228229401496703205371 true
+print(big / 3, big % 1000, big / -3)         // expect: 422550200076076467165567735125 376 -422550200076076467165567735125
+print(BigInt.of(-7) / 2, BigInt.of(-7) % 2, BigInt.of(7) / -2, BigInt.of(7) % -2)   // expect: -3 -1 -3 1
+print(BigInt.of(-7).floorDiv(2), BigInt.of(-7).floorMod(2), BigInt.of(7).floorMod(-2))   // expect: -4 1 -1
+val minus64 = -BigInt.two.pow(64)
+print(minus64.floorDiv(3), minus64.floorMod(3), minus64 / 3, minus64 % 3)   // expect: -6148914691236517206 2 -6148914691236517205 -1
+print(100 / BigInt.of(7), 100 % BigInt.of(7), big + 0.5, 1.5 * BigInt.of(4))   // expect: 14 2 1.2676506002282294e+30 6.0
+var f = BigInt.one
+for (i in 1 .. 50) { f = f * i }
+print(f)                                     // expect: 30414093201713378043612608166064768844377641568960512000000000000
+print(f / 48 / 49 / 50)                      // expect: 258623241511168180642964355153611979969197632389120000000000
+
+// ---- Large numbers: Karatsuba from 48 digits, Knuth's division ----
+val a = BigInt.of(3).pow(2000)
+val b = BigInt.of(7).pow(1500)
+val p = a * b
+val text = p.toString()
+var digitSum = 0
+for (c in text) { digitSum += c.code - 48 }
+print(text.size, text[0 ..< 20], text[text.size - 20 ..< text.size], digitSum)   // expect: 2222 77547796276317754161 34807550982031340001 9837
+val (q, r) = (p + 12345).divRem(b - 1)
+print(q == a, r == a + 12345)                // expect: true true
+print(p / a == b, p % a, BigInt.parse(text) == p, BigInt.parse(p.toString(36), 36) == p)   // expect: true 0 true true
+
+// Numbers of many lengths made by a little generator, checked by identities.
+var seed = 12345
+fun nextDigit() : int {
+  seed = (seed * 1103515245 + 12345) & 2147483647
+  return seed
+}
+fun made(digits : int) : BigInt {
+  var x = BigInt.zero
+  for (i in 0 ..< digits) { x = (x << 31) + nextDigit() }
+  return (nextDigit() & 1) == 0 ? x : -x
+}
+var wrong = 0
+for (n in [1, 2, 3, 5, 30, 47, 48, 49, 60, 100, 130]) {
+  for (m in [1, 2, 4, 47, 50, 97]) {
+    val x = made(n)
+    val y = made(m)
+    if (y.isZero) { continue }
+    val (qq, rr) = x.divRem(y)
+    if (qq * y + rr != x or rr.abs() >= y.abs() or (rr.signum != 0 and rr.signum != x.signum)) { wrong += 1 }
+    if ((x + y) - y != x or (x * y) / y != x or (x * y) % y != BigInt.zero) { wrong += 1 }
+    if (x * y != y * x or (x + y) * (x - y) != x * x - y * y) { wrong += 1 }
+    if ((x << 77) >> 77 != x or x << 5 != x * 32 or x >> 3 != x.floorDiv(8)) { wrong += 1 }
+    if (x.toString(7).toBigInt(7) != x or (x & y) + (x | y) != x + y or (x ^ y) != (x | y) - (x & y)) { wrong += 1 }
+  }
+}
+print(wrong)                                 // expect: 0
+
+// ---- Roots, powers, divisors ----
+print(BigInt.ten.pow(101).sqrt())            // expect: 316227766016837933199889354443271853371955513932521
+print(BigInt.of(2).modPow(BigInt.parse("1000000000000000009"), BigInt.ten.pow(30) + 57))   // expect: 117176614534302665331216100997
+print(BigInt.parse("12345678901234567890").modInverse(BigInt.two.pow(127) - 1))   // expect: 95987530177320089548629399254220539361
+print((BigInt.two.pow(300) * BigInt.of(3).pow(50)).gcd(BigInt.of(6).pow(120)))   // expect: 954250103357665420071674605767760682672681396811237817319424
+print(BigInt.of(-12).gcd(18), BigInt.zero.gcd(0), BigInt.of(3).modInverse(BigInt.of(11)), BigInt.of(-5).abs())   // expect: 6 0 4 5
+print(BigInt.of(2).pow(0), BigInt.zero.pow(0), BigInt.of(-3).pow(3), BigInt.of(99).sqrt(), BigInt.of(100).sqrt())   // expect: 1 1 -27 9 10
+
+// ---- Bits, in two's complement ----
+print(BigInt.of(-6) & 5, BigInt.of(-6) | 5, BigInt.of(-6) ^ 5, ~BigInt.of(5), BigInt.of(-6) >> 1)   // expect: 0 -1 -1 -6 -3
+print(-BigInt.two.pow(200) & (BigInt.two.pow(199) + 12345), (-BigInt.two.pow(100) + 5) | 65535)   // expect: 0 -1267650600228229401496703139841
+print(BigInt.two.pow(130) ^ -BigInt.two.pow(65))   // expect: -1361129467683753853890391917874491949056
+print(BigInt.two.pow(64) >> 3, (-BigInt.two.pow(64) - 1) >> 3, -BigInt.two.pow(64) >> 70, big >> -2 == big << 2)   // expect: 2305843009213693952 -2305843009213693953 -1 true
+print(BigInt.of(-1).bitLength, BigInt.of(255).bitLength, BigInt.of(-256).bitLength, BigInt.zero.bitLength)   // expect: 0 8 8 0
+print(BigInt.of(5).testBit(0), BigInt.of(5).testBit(1), BigInt.of(-2).testBit(0), BigInt.of(-2).testBit(500))   // expect: true false false true
+
+// ---- Into ints and floats ----
+print(BigInt.of(123).toInt(), BigInt.two.pow(63).toIntOrNull(), (-BigInt.two.pow(63)).toInt(), big.fitsInt)   // expect: 123 null -9223372036854775808 false
+print(big.toFloat(), (BigInt.ten.pow(400) / BigInt.of(3).pow(300)).toFloat())   // expect: 1.2676506002282294e+30 7.30505658114782e+256
+// Rounded once, to even where halfway: what is cut below the top 63 bits still counts.
+print((BigInt.two.pow(1023) * 3 / 2).toFloat(), ((BigInt.two.pow(53) + 1) * BigInt.two.pow(900)).toFloat())   // expect: 1.348269851146737e+308 7.61352657140625e+286
+print((BigInt.two.pow(1024) - BigInt.two.pow(971) - 1).toFloat(), BigInt.two.pow(1024).toFloat(), (-BigInt.two.pow(1100)).toFloat())   // expect: 1.7976931348623157e+308 inf -inf
+
+// ---- Comparing, equality, keys ----
+print(big > 5, 5 < big, -big < 5, big >= big, BigInt.of(3).compareTo(4), BigInt.of(-3).compareTo(-4))   // expect: true true true true -1 1
+print(5 == BigInt.of(5), BigInt.of(5) == 5, BigInt.of(5) == 5.0, 5.0 == BigInt.of(5), BigInt.of(5) == 5.5, big == big.toFloat())   // expect: true true true true false true
+print([1, 2, 3].contains(BigInt.of(2)), [BigInt.of(1), 2] == [1, BigInt.of(2)], BigInt.of(7).hashCode() == 7.hashCode())   // expect: true true true
+val keyed : Map<any, string> = mapOf(7 to "seven", big to "big")
+print(keyed[BigInt.of(7)], keyed[BigInt.two.pow(100)], BigInt.of(7) in keyed.keys, setOf(5, BigInt.of(5), 5.0).size)   // expect: seven big true 1
+
+// ---- Errors ----
+fun failed(block : () -> any?) : string {
+  try {
+    block()
+    return "no error"
+  } catch (e : Exception) {
+    return e#.name
+  }
+}
+print(failed { big / 0 }, failed { big % BigInt.zero }, failed { big.toInt() }, failed { BigInt.parse("1.5") })   // expect: ArithmeticException ArithmeticException ArithmeticException NumberFormatException
+print(failed { BigInt.of(-4).sqrt() }, failed { big.pow(-1) }, failed { BigInt.of(2).modInverse(BigInt.of(4)) }, failed { BigInt.of(0.0 / 0.0) })   // expect: ArithmeticException ArithmeticException ArithmeticException ArithmeticException
+print(failed { BigInt.parse("1", 37) }, failed { big.toString(1) }, failed { big.testBit(-1) })   // expect: IllegalArgumentException IllegalArgumentException IllegalArgumentException

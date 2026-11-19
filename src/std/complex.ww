@@ -1,0 +1,272 @@
+// ---- Complex numbers (2026-11-19) ----
+// A complex number: a real part and an imaginary part, two floats, held as a value (no object of
+// its own, copied where it is passed). The functions follow C99's and Python's cmath: their
+// branch cuts are the same, signed zeros read the same way (1 - z keeps the sign of z's
+// imaginary zero turned round, as a real number less a complex one does there).
+//
+//   val z = Complex.of(3, 4)                    // 3.0+4.0i
+//   print(z.abs(), z * Complex.i, 1 / z, z.sqrt(), Complex.of(-1).sqrt())
+//   print(Complex.i.pow(2) == -1)               // true
+//   print(Complex.fromPolar(2, Math.pi / 2))    // 1.2246467991473532e-16+2.0i
+//
+// It mixes with ints and floats on either side; a complex number whose imaginary part is 0 is
+// equal to the real number of its real part (Complex.of(3) == 3), and finds it as a key.
+
+// A complex number, re + im i, two floats held as a value.
+value Complex(val re : float, val im : float) {
+  static {
+    // The number `re` + `im` i, from ints or floats.
+    fun of(re : Number, im : Number = 0) : Complex => Complex(re.toFloat(), im.toFloat())
+    // The number of size `r` at the angle `theta` (radians) from the real axis.
+    fun fromPolar(r : Number, theta : Number) : Complex {
+      val t = theta.toFloat()
+      return Complex(r.toFloat() * Math.cos(t), r.toFloat() * Math.sin(t))
+    }
+    // 0.
+    val zero : Complex = Complex(0.0, 0.0)
+    // 1.
+    val one : Complex = Complex(1.0, 0.0)
+    // The imaginary unit: i * i is -1.
+    val i : Complex = Complex(0.0, 1.0)
+  }
+
+  // ---- Arithmetic ----
+
+  // The sum.
+  op +(other : Complex) : Complex => Complex(re + other.re, im + other.im)
+  // The sum with a float.
+  op +(other : float) : Complex => Complex(re + other, im)
+  // The sum with an int.
+  op +(other : int) : Complex => Complex(re + other.toFloat(), im)
+  // The difference.
+  op -(other : Complex) : Complex => Complex(re - other.re, im - other.im)
+  // The difference with a float.
+  op -(other : float) : Complex => Complex(re - other, im)
+  // The difference with an int.
+  op -(other : int) : Complex => Complex(re - other.toFloat(), im)
+  // The number with both parts' signs turned round.
+  op -() : Complex => Complex(-re, -im)
+  // The product.
+  op *(other : Complex) : Complex => Complex(re * other.re - im * other.im, re * other.im + im * other.re)
+  // The product with a float.
+  op *(other : float) : Complex => Complex(re * other, im * other)
+  // The product with an int.
+  op *(other : int) : Complex => this * other.toFloat()
+  // Divided by Smith's way, which neither overflows nor underflows on the way where the
+  // answer itself does not.
+  op /(other : Complex) : Complex {
+    val c = other.re
+    val d = other.im
+    if (Math.abs(c) >= Math.abs(d)) {
+      if (c == 0.0 and d == 0.0) { return Complex(re / 0.0, im / 0.0) }
+      val r = d / c
+      val t = c + d * r
+      return Complex((re + im * r) / t, (im - re * r) / t)
+    }
+    val r = c / d
+    val t = c * r + d
+    return Complex((re * r + im) / t, (im * r - re) / t)
+  }
+  // Divided by a float.
+  op /(other : float) : Complex => Complex(re / other, im / other)
+  // Divided by an int.
+  op /(other : int) : Complex => this / other.toFloat()
+
+  // Its size: the distance from 0, without overflow on the way.
+  fun abs() : float => Math.hypot(re, im)
+  // Its angle from the positive real axis, in radians, from -pi to pi.
+  fun arg() : float => Math.atan2(im, re)
+  // Its mirror in the real axis: the imaginary part's sign turned round.
+  fun conjugate() : Complex => Complex(re, -im)
+  // 1 divided by it.
+  fun reciprocal() : Complex => Complex.one / this
+  // Whether either part is NaN.
+  fun isNaN() : bool => re.isNaN() or im.isNaN()
+  // Whether either part is an infinity (and neither NaN).
+  fun isInfinite() : bool => !isNaN() and (re.isInfinite() or im.isInfinite())
+
+  // To the power `n`, worked out by multiplying (exactly where the parts are whole and small:
+  // i to the power 2 is -1, not nearly); a negative `n` gives 1 over the power.
+  fun pow(n : int) : Complex {
+    if (n < 0) { return Complex.one / pow(-n) }
+    var result = Complex.one
+    var square = this
+    var e = n
+    while (e > 0) {
+      if ((e & 1) == 1) { result = result * square }
+      e = e >> 1
+      if (e > 0) { square = square * square }
+    }
+    return result
+  }
+  // To the power `w`: e to the power w * log(this). 0 to a power whose real part is above 0 is 0,
+  // and anything to the power 0 is 1.
+  fun pow(w : Complex) : Complex {
+    if (w.re == 0.0 and w.im == 0.0) { return Complex.one }
+    if (re == 0.0 and im == 0.0) {
+      if (w.re > 0.0) { return Complex.zero }
+      return Complex(__complexNaN, __complexNaN)
+    }
+    if (w.im == 0.0 and w.re == w.re.toInt().toFloat() and Math.abs(w.re) < 1024.0) { return pow(w.re.toInt()) }
+    return (w * log()).exp()
+  }
+  // To the power of a float `x`: e to the power x * log(this).
+  fun pow(x : float) : Complex => pow(Complex(x, 0.0))
+
+  // ---- Functions ----
+
+  // The principal square root: its real part 0 or more, the cut along the negative real axis
+  // (-1+0.0i gives i, -1-0.0i gives -i).
+  fun sqrt() : Complex {
+    if (re == 0.0 and im == 0.0) { return Complex(0.0, im) }
+    if (im.isInfinite()) { return Complex(__complexInfinity, im) }
+    val t = Math.sqrt((Math.abs(re) + Math.hypot(re, im)) / 2.0)
+    if (re >= 0.0) { return Complex(t, im / (2.0 * t)) }
+    return Complex(Math.abs(im) / (2.0 * t), __negative(im) ? -t : t)
+  }
+  // e to its power.
+  fun exp() : Complex {
+    val size = Math.exp(re)
+    if (im == 0.0) { return Complex(size, im) }
+    return Complex(size * Math.cos(im), size * Math.sin(im))
+  }
+  // The natural logarithm, its imaginary part from -pi to pi (the cut along the negative real axis).
+  fun log() : Complex {
+    val ax = Math.abs(re)
+    val ay = Math.abs(im)
+    val (big, small) = ax >= ay ? Pair(ax, ay) : Pair(ay, ax)
+    val h = Math.hypot(ax, ay)
+    // Near a size of 1, ln(size) from log1p, where ln loses the digits that matter.
+    if (h > 0.71 and h < 1.73) {
+      return Complex(Math.log1p((big - 1.0) * (big + 1.0) + small * small) / 2.0, arg())
+    }
+    return Complex(Math.ln(h), arg())
+  }
+  // The logarithm in base 10.
+  fun log10() : Complex => log() / 2.302585092994046
+  // The sine.
+  fun sin() : Complex => Complex(Math.sin(re) * Math.cosh(im), Math.cos(re) * Math.sinh(im))
+  // The cosine.
+  fun cos() : Complex => Complex(Math.cos(re) * Math.cosh(im), -(Math.sin(re) * Math.sinh(im)))
+  // The tangent.
+  fun tan() : Complex {
+    // i tanh(-i z) turned round: tan(a + bi) = i tanh(b - ai)
+    val t = Complex(-im, re).tanh()
+    return Complex(t.im, -t.re)
+  }
+  // The hyperbolic sine.
+  fun sinh() : Complex => Complex(Math.sinh(re) * Math.cos(im), Math.cosh(re) * Math.sin(im))
+  // The hyperbolic cosine.
+  fun cosh() : Complex => Complex(Math.cosh(re) * Math.cos(im), Math.sinh(re) * Math.sin(im))
+  // The hyperbolic tangent; exact far from 0, where the parts' exponentials would overflow.
+  fun tanh() : Complex {
+    // Past 20 in size the parts' exponentials overflow before tanh's own size changes.
+    if (Math.abs(re) > 20.0) {
+      val s = re > 0.0 ? 1.0 : -1.0
+      return Complex(s, 4.0 * Math.sin(im) * Math.cos(im) * Math.exp(-2.0 * Math.abs(re)))
+    }
+    val t = Math.tan(im)
+    val b = 1.0 + t * t
+    val s = Math.sinh(re)
+    val c = Math.sqrt(1.0 + s * s)
+    val d = 1.0 + b * s * s
+    return Complex(b * c * s / d, t / d)
+  }
+  // The inverse functions, each the principal value, their cuts where C99 puts them.
+  fun asin() : Complex {
+    // asin(z) = -i asinh(i z)
+    val w = Complex(-im, re).asinh()
+    return Complex(w.im, -w.re)
+  }
+  // The inverse cosine, its real part from 0 to pi.
+  fun acos() : Complex {
+    val a = (1.0 - this).sqrt()
+    val b = (this + 1.0).sqrt()
+    return Complex(2.0 * Math.atan2(a.re, b.re), Math.asinh(b.re * a.im - b.im * a.re))
+  }
+  // The inverse tangent.
+  fun atan() : Complex {
+    // atan(z) = -i atanh(i z)
+    val w = Complex(-im, re).atanh()
+    return Complex(w.im, -w.re)
+  }
+  // The inverse hyperbolic sine.
+  fun asinh() : Complex {
+    val a = Complex(1.0 + im, -re).sqrt()
+    val b = Complex(1.0 - im, re).sqrt()
+    return Complex(Math.asinh(a.re * b.im - a.im * b.re), Math.atan2(im, a.re * b.re - a.im * b.im))
+  }
+  // The inverse hyperbolic cosine, its real part 0 or more.
+  fun acosh() : Complex {
+    val a = (this - 1.0).sqrt()
+    val b = (this + 1.0).sqrt()
+    return Complex(Math.asinh(a.re * b.re + a.im * b.im), 2.0 * Math.atan2(a.im, b.re))
+  }
+  // The inverse hyperbolic tangent.
+  fun atanh() : Complex {
+    // Odd: worked out for a real part of 0 or more (CPython's way, digits kept near 0 and 1).
+    if (__negative(re)) {
+      val w = (-this).atanh()
+      return Complex(-w.re, -w.im)
+    }
+    val ay = Math.abs(im)
+    if (re > 1.0e150 or ay > 1.0e150) {
+      val h = Math.hypot(re / 2.0, im / 2.0)
+      return Complex(re / h / h / 4.0, __negative(im) ? -Math.pi / 2.0 : Math.pi / 2.0)
+    }
+    if (re == 1.0 and ay < 1.0e-150) {
+      val partRe = ay == 0.0 ? __complexInfinity : -Math.ln(Math.sqrt(ay) / Math.sqrt(Math.hypot(ay, 2.0)))
+      val partIm = Math.atan2(2.0, -ay) / 2.0
+      return Complex(partRe, __negative(im) ? -partIm : partIm)
+    }
+    val oneLess = 1.0 - re
+    return Complex(Math.log1p(4.0 * re / (oneLess * oneLess + ay * ay)) / 4.0,
+                   -Math.atan2(-2.0 * im, oneLess * (1.0 + re) - ay * ay) / 2.0)
+  }
+
+  // ---- Comparing ----
+
+  // Equal to a Complex of equal parts, or to an int or float equal to its real part where its
+  // imaginary part is 0. NaN in either part is equal to nothing, as a float NaN is.
+  op ==(other : any?) : bool {
+    if (other is Complex) {
+      val z = other as Complex
+      return re == z.re and im == z.im
+    }
+    return other is Number and im == 0.0 and re == other
+  }
+  // A real one's is its real part's, so that Complex.of(3) and 3 find each other as keys.
+  fun hashCode() : int => im == 0.0 ? re.hashCode() : (re.hashCode() &* 31) &+ im.hashCode()
+
+  // As "3.0+4.0i", "3.0-4.0i".
+  fun toString() : string => "$re${__negative(im) ? "-" : "+"}${__negative(im) ? -im : im}i"
+}
+
+// Into a Complex: the number with an imaginary part of 0.
+fun int.toComplex() : Complex => Complex(this.toFloat(), 0.0)
+// The float with an imaginary part of 0.
+fun float.toComplex() : Complex => Complex(this, 0.0)
+
+// An int or a float on the left of a Complex: the real number's imaginary part a 0 with no sign
+// to give (x - z keeps z's imaginary part turned round, -0.0 for a 0.0, as C99's does).
+op int.+(other : Complex) : Complex => Complex(this.toFloat() + other.re, other.im)
+// The int less a Complex.
+op int.-(other : Complex) : Complex => Complex(this.toFloat() - other.re, -other.im)
+// The int times a Complex.
+op int.*(other : Complex) : Complex => Complex(this.toFloat() * other.re, this.toFloat() * other.im)
+// The int divided by a Complex.
+op int./(other : Complex) : Complex => Complex(this.toFloat(), 0.0) / other
+// The float plus a Complex.
+op float.+(other : Complex) : Complex => Complex(this + other.re, other.im)
+// The float less a Complex.
+op float.-(other : Complex) : Complex => Complex(this - other.re, -other.im)
+// The float times a Complex.
+op float.*(other : Complex) : Complex => Complex(this * other.re, this * other.im)
+// The float divided by a Complex.
+op float./(other : Complex) : Complex => Complex(this, 0.0) / other
+
+// Whether `x` is below 0, -0.0 counted.
+fun __negative(x : float) : bool => x < 0.0 or (x == 0.0 and 1.0 / x < 0.0)
+
+val __complexNaN = 0.0 / 0.0
+val __complexInfinity = 1.0 / 0.0

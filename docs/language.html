@@ -234,7 +234,7 @@ val tally = Tally()
 (0 ..&lt; 1000).toList().parallelStream().forEach { tally.hits += 1 }    // tally.hits is 1000</pre></dd>
 
 <dt><code>op</code></dt>
-<dd>An operator of a class or value type: <code>op +(other)</code>, <code>op [](index)</code>, <code>op ==(other)</code> and the others, used as the operator is. <code>a[i] = v</code> needs an <code>op []=(index, value)</code> alone; <code>a[i] += v</code> needs <code>op []</code> as well, to read it first.
+<dd>An operator of a class or value type: <code>op +(other)</code>, <code>op [](index)</code>, <code>op ==(other)</code> and the others, used as the operator is. <code>a[i] = v</code> needs an <code>op []=(index, value)</code> alone; <code>a[i] += v</code> needs <code>op []</code> as well, to read it first. An <code>op ==</code> is asked either way round: <code>5 == BigInt.of(5)</code> asks BigInt's, as a list's <code>contains</code>, two lists compared, and a map's or set's keys do, so that a plain number and an object equal to it are one key (with a <code>hashCode</code> to match).
 <pre>value Money(val cents : int) {
   op +(other : Money) : Money =&gt; Money(cents + other.cents)
 }
@@ -413,10 +413,12 @@ addButton(widgets)</pre></dd>
 <h2 id="api-files">The standard library, file by file</h2>
 <ul>
 <li><a href="#file-base64-ww">base64.ww</a></li>
+<li><a href="#file-bigint-ww">bigint.ww</a></li>
 <li><a href="#file-bits-ww">bits.ww</a></li>
 <li><a href="#file-bmp-ww">bmp.ww</a></li>
 <li><a href="#file-builtins-ww">builtins.ww</a></li>
 <li><a href="#file-bytesource-ww">bytesource.ww</a></li>
+<li><a href="#file-complex-ww">complex.ww</a></li>
 <li><a href="#file-core-ww">core.ww</a></li>
 <li><a href="#file-errors-ww">errors.ww</a></li>
 <li><a href="#file-file-ww">file.ww</a></li>
@@ -471,6 +473,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Base64"><code>Base64</code></a> (3)</li>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
+<li><a href="#BigInt"><code>BigInt</code></a> (68)</li>
 <li><a href="#BitOrder"><code>BitOrder</code></a> (1)</li>
 <li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
 <li><a href="#BlendMode"><code>BlendMode</code></a> (1)</li>
@@ -487,6 +490,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Color"><code>Color</code></a> (24)</li>
 <li><a href="#ColorLookup"><code>ColorLookup</code></a> (1)</li>
 <li><a href="#ColorSpace"><code>ColorSpace</code></a> (1)</li>
+<li><a href="#Complex"><code>Complex</code></a> (47)</li>
 <li><a href="#Composite"><code>Composite</code></a> (1)</li>
 <li><a href="#ConcurrentModificationException"><code>ConcurrentModificationException</code></a> (1)</li>
 <li><a href="#Constructor"><code>Constructor</code></a> (6)</li>
@@ -557,7 +561,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#MatchGroup"><code>MatchGroup</code></a> (1)</li>
 <li><a href="#MatchGroupCollection"><code>MatchGroupCollection</code></a> (7)</li>
 <li><a href="#MatchResult"><code>MatchResult</code></a> (8)</li>
-<li><a href="#Math"><code>Math</code></a> (37)</li>
+<li><a href="#Math"><code>Math</code></a> (45)</li>
 <li><a href="#Memory"><code>Memory</code></a> (29)</li>
 <li><a href="#Method"><code>Method</code></a> (8)</li>
 <li><a href="#Network"><code>Network</code></a> (3)</li>
@@ -600,13 +604,13 @@ addButton(widgets)</pre></dd>
 <li><a href="#Sandboxed"><code>Sandboxed</code></a> (1)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
-<li><a href="#ServerSocket"><code>ServerSocket</code></a> (5)</li>
+<li><a href="#ServerSocket"><code>ServerSocket</code></a> (6)</li>
 <li><a href="#Set.size"><code>Set</code></a> (78)</li>
 <li><a href="#Shape"><code>Shape</code></a> (3)</li>
 <li><a href="#SharedMap"><code>SharedMap</code></a> (12)</li>
 <li><a href="#SharedSet"><code>SharedSet</code></a> (7)</li>
 <li><a href="#Size"><code>Size</code></a> (3)</li>
-<li><a href="#Socket"><code>Socket</code></a> (12)</li>
+<li><a href="#Socket"><code>Socket</code></a> (14)</li>
 <li><a href="#SocketTimeoutException"><code>SocketTimeoutException</code></a> (1)</li>
 <li><a href="#StackOverflowError"><code>StackOverflowError</code></a> (1)</li>
 <li><a href="#Stream"><code>Stream</code></a> (1)</li>
@@ -649,9 +653,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#any.toString"><code>any</code></a> (5)</li>
 <li><a href="#byte.toInt"><code>byte</code></a> (1)</li>
 <li><a href="#char.code"><code>char</code></a> (11)</li>
-<li><a href="#float.coerceIn"><code>float</code></a> (16)</li>
-<li><a href="#int.char"><code>int</code></a> (30)</li>
-<li><a href="#string.size"><code>string</code></a> (109)</li>
+<li><a href="#float.toBigInt"><code>float</code></a> (26)</li>
+<li><a href="#int.toBigInt"><code>int</code></a> (45)</li>
+<li><a href="#string.toBigInt"><code>string</code></a> (111)</li>
 </ul>
 <section class="file" id="file-base64-ww">
 <h2>base64.ww</h2>
@@ -668,6 +672,272 @@ val back = Base64.decode(text).decodeToString()  // &quot;hello&quot;
 <div class="entry member" id="Base64.decode"><code class="sig">fun decode(text : string) : Bytes</code><a class="anchor" href="#Base64.decode">#</a>
 <p>The bytes Base64 text stands for. Whitespace in it is passed over, so the lines MIME breaks it into every 76 characters are read as one; the padding = at the end may be left out. An IllegalArgumentException for a character Base64 has not, for = before the end, or for a length no bytes give (one character over a whole number of fours).</p>
 </div>
+</section>
+<section class="file" id="file-bigint-ww">
+<h2>bigint.ww</h2>
+<h3>Whole numbers of any size (2026-11-19)</h3>
+<p>A BigInt is a whole number with no limit to its size: what an int holds and past it, its arithmetic exact however long the numbers grow. It never changes; each operation gives a new one. Written in WinterWolf, its digits held as a list of ints of 30 bits each, lowest first, so that a digit times a digit, and what is carried, always fits in an int.</p>
+<pre>val big = BigInt.of(2).pow(100)            // 1267650600228229401496703205376
+val n = &quot;123456789012345678901234567890&quot;.toBigInt()
+print(big * n + 7, big / 3, big % 1000, -big &lt; n)
+</pre>
+<p>It mixes with ints on either side (<code>5 + big</code>, <code>big * 2</code>, <code>5 == BigInt.of(5)</code>), and with floats, which make a float. <code>/</code> and <code>%</code> cut toward zero, as an int's do (-7 / 2 is -3, -7 % 2 is -1); floorDiv and floorMod round down, as Python's // and % do. The bitwise operators work as if the number were in two's complement with as many bits as it needs, a negative one's ones going on forever (as Python's and Java's do).</p>
+<div class="entry" id="BigInt"><code class="sig">class BigInt</code><a class="anchor" href="#BigInt">#</a>
+<p>A whole number of any size, exact; each operation gives a new one.</p>
+</div>
+<div class="entry member" id="BigInt.of"><code class="sig">fun of(n : int) : BigInt</code><a class="anchor" href="#BigInt.of">#</a>
+<p>The number <code>n</code>.</p>
+</div>
+<div class="entry member" id="BigInt.of-2"><code class="sig">fun of(x : float) : BigInt</code><a class="anchor" href="#BigInt.of-2">#</a>
+<p>The whole number <code>x</code> is, cut toward zero (2.7 makes 2, -2.7 makes -2), exactly however large; an ArithmeticException for an infinity or NaN.</p>
+</div>
+<div class="entry member" id="BigInt.parse"><code class="sig">fun parse(text : string, radix : int = 10) : BigInt</code><a class="anchor" href="#BigInt.parse">#</a>
+<p>The number <code>text</code> writes in base <code>radix</code> (2 to 36), a sign first if it has one, and underscores between digits allowed (1_000_000); a NumberFormatException for anything else.</p>
+</div>
+<div class="entry member" id="BigInt.parseOrNull"><code class="sig">fun parseOrNull(text : string, radix : int = 10) : BigInt?</code><a class="anchor" href="#BigInt.parseOrNull">#</a>
+<p>The same, null for text that is not one.</p>
+</div>
+<div class="entry member" id="BigInt.zero"><code class="sig">val zero : BigInt</code><a class="anchor" href="#BigInt.zero">#</a>
+<p>0.</p>
+</div>
+<div class="entry member" id="BigInt.one"><code class="sig">val one : BigInt</code><a class="anchor" href="#BigInt.one">#</a>
+<p>1.</p>
+</div>
+<div class="entry member" id="BigInt.two"><code class="sig">val two : BigInt</code><a class="anchor" href="#BigInt.two">#</a>
+<p>2.</p>
+</div>
+<div class="entry member" id="BigInt.ten"><code class="sig">val ten : BigInt</code><a class="anchor" href="#BigInt.ten">#</a>
+<p>10.</p>
+</div>
+<div class="entry member" id="BigInt.signum"><code class="sig">val signum : int</code><a class="anchor" href="#BigInt.signum">#</a>
+<p>-1, 0 or 1, as the number is below, at or above zero.</p>
+</div>
+<div class="entry member" id="BigInt.isZero"><code class="sig">val isZero : bool</code><a class="anchor" href="#BigInt.isZero">#</a>
+<p>Whether it is 0.</p>
+</div>
+<div class="entry member" id="BigInt.bitLength"><code class="sig">val bitLength : int</code><a class="anchor" href="#BigInt.bitLength">#</a>
+<p>The bits it needs, not counting a sign: 0 for 0, 1 for 1 and -1, 8 for 255 and -256 (as Java's bitLength: a negative number's in two's complement, its ones not counted).</p>
+</div>
+<div class="entry member" id="BigInt.+"><code class="sig">op +(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.+">#</a>
+<p>The sum.</p>
+</div>
+<div class="entry member" id="BigInt.+-2"><code class="sig">op +(other : int) : BigInt</code><a class="anchor" href="#BigInt.+-2">#</a>
+<p>The sum with an int.</p>
+</div>
+<div class="entry member" id="BigInt.+-3"><code class="sig">op +(other : float) : float</code><a class="anchor" href="#BigInt.+-3">#</a>
+<p>The sum with a float, as a float.</p>
+</div>
+<div class="entry member" id="BigInt.-"><code class="sig">op -(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.-">#</a>
+<p>The difference.</p>
+</div>
+<div class="entry member" id="BigInt.--2"><code class="sig">op -(other : int) : BigInt</code><a class="anchor" href="#BigInt.--2">#</a>
+<p>The difference with an int.</p>
+</div>
+<div class="entry member" id="BigInt.--3"><code class="sig">op -(other : float) : float</code><a class="anchor" href="#BigInt.--3">#</a>
+<p>The difference with a float, as a float.</p>
+</div>
+<div class="entry member" id="BigInt.unary-"><code class="sig">op -() : BigInt</code><a class="anchor" href="#BigInt.unary-">#</a>
+<p>The number with its sign turned round.</p>
+</div>
+<div class="entry member" id="BigInt.*"><code class="sig">op *(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.*">#</a>
+<p>The product.</p>
+</div>
+<div class="entry member" id="BigInt.*-2"><code class="sig">op *(other : int) : BigInt</code><a class="anchor" href="#BigInt.*-2">#</a>
+<p>The product with an int.</p>
+</div>
+<div class="entry member" id="BigInt.*-3"><code class="sig">op *(other : float) : float</code><a class="anchor" href="#BigInt.*-3">#</a>
+<p>The product with a float, as a float.</p>
+</div>
+<div class="entry member" id="BigInt./"><code class="sig">op /(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt./">#</a>
+<p>Cut toward zero, as an int's; an ArithmeticException for 0.</p>
+</div>
+<div class="entry member" id="BigInt./-2"><code class="sig">op /(other : int) : BigInt</code><a class="anchor" href="#BigInt./-2">#</a>
+<p>Divided by an int, cut toward zero.</p>
+</div>
+<div class="entry member" id="BigInt./-3"><code class="sig">op /(other : float) : float</code><a class="anchor" href="#BigInt./-3">#</a>
+<p>Divided by a float, as a float.</p>
+</div>
+<div class="entry member" id="BigInt.%"><code class="sig">op %(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.%">#</a>
+<p>The rest, with the sign of the number divided, as an int's; an ArithmeticException for 0.</p>
+</div>
+<div class="entry member" id="BigInt.%-2"><code class="sig">op %(other : int) : BigInt</code><a class="anchor" href="#BigInt.%-2">#</a>
+<p>The rest after dividing by an int, with the sign of this number.</p>
+</div>
+<div class="entry member" id="BigInt.divRem"><code class="sig">fun divRem(by : BigInt) : Pair&lt;BigInt, BigInt&gt;</code><a class="anchor" href="#BigInt.divRem">#</a>
+<p>The quotient cut toward zero and the rest, in one division.</p>
+</div>
+<div class="entry member" id="BigInt.floorDiv"><code class="sig">fun floorDiv(by : BigInt) : BigInt</code><a class="anchor" href="#BigInt.floorDiv">#</a>
+<p>Divided and rounded down (toward minus infinity), as Python's //.</p>
+</div>
+<div class="entry member" id="BigInt.floorDiv-2"><code class="sig">fun floorDiv(by : int) : BigInt</code><a class="anchor" href="#BigInt.floorDiv-2">#</a>
+<p>floorDiv by an int.</p>
+</div>
+<div class="entry member" id="BigInt.floorMod"><code class="sig">fun floorMod(by : BigInt) : BigInt</code><a class="anchor" href="#BigInt.floorMod">#</a>
+<p>The rest after floorDiv, with the sign of <code>by</code>, as Python's %.</p>
+</div>
+<div class="entry member" id="BigInt.floorMod-2"><code class="sig">fun floorMod(by : int) : BigInt</code><a class="anchor" href="#BigInt.floorMod-2">#</a>
+<p>floorMod by an int.</p>
+</div>
+<div class="entry member" id="BigInt.abs"><code class="sig">fun abs() : BigInt</code><a class="anchor" href="#BigInt.abs">#</a>
+<p>Its size, the sign dropped.</p>
+</div>
+<div class="entry member" id="BigInt.pow"><code class="sig">fun pow(exponent : int) : BigInt</code><a class="anchor" href="#BigInt.pow">#</a>
+<p>To the power <code>exponent</code>, 0 or more (anything to the 0 is 1).</p>
+</div>
+<div class="entry member" id="BigInt.gcd"><code class="sig">fun gcd(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.gcd">#</a>
+<p>The greatest whole number dividing both, never negative; gcd(0, 0) is 0.</p>
+</div>
+<div class="entry member" id="BigInt.gcd-2"><code class="sig">fun gcd(other : int) : BigInt</code><a class="anchor" href="#BigInt.gcd-2">#</a>
+<p>gcd with an int.</p>
+</div>
+<div class="entry member" id="BigInt.modPow"><code class="sig">fun modPow(exponent : BigInt, modulus : BigInt) : BigInt</code><a class="anchor" href="#BigInt.modPow">#</a>
+<p>To the power <code>exponent</code> (0 or more), all modulo <code>modulus</code> (above 0): the result 0 or more and below it, worked out without the whole power.</p>
+</div>
+<div class="entry member" id="BigInt.modPow-2"><code class="sig">fun modPow(exponent : int, modulus : BigInt) : BigInt</code><a class="anchor" href="#BigInt.modPow-2">#</a>
+<p>modPow with an int exponent.</p>
+</div>
+<div class="entry member" id="BigInt.modInverse"><code class="sig">fun modInverse(modulus : BigInt) : BigInt</code><a class="anchor" href="#BigInt.modInverse">#</a>
+<p>The number that, times this, is 1 modulo <code>modulus</code>; an ArithmeticException where there is none (they share a divisor).</p>
+</div>
+<div class="entry member" id="BigInt.sqrt"><code class="sig">fun sqrt() : BigInt</code><a class="anchor" href="#BigInt.sqrt">#</a>
+<p>The whole part of its square root: the largest whole number whose square is not above it; an ArithmeticException for a negative number.</p>
+</div>
+<div class="entry member" id="BigInt.&lt;&lt;"><code class="sig">op &lt;&lt;(by : int) : BigInt</code><a class="anchor" href="#BigInt.&lt;&lt;">#</a>
+<p>Moved up <code>by</code> bits (times 2 to that power); a negative <code>by</code> moves it down.</p>
+</div>
+<div class="entry member" id="BigInt.&gt;&gt;"><code class="sig">op &gt;&gt;(by : int) : BigInt</code><a class="anchor" href="#BigInt.&gt;&gt;">#</a>
+<p>Moved down <code>by</code> bits, rounded down (toward minus infinity), as an int's &gt;&gt; is.</p>
+</div>
+<div class="entry member" id="BigInt.&amp;"><code class="sig">op &amp;(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.&amp;">#</a>
+<p>The bits set in both, in two's complement.</p>
+</div>
+<div class="entry member" id="BigInt.&amp;-2"><code class="sig">op &amp;(other : int) : BigInt</code><a class="anchor" href="#BigInt.&amp;-2">#</a>
+<p>&amp; with an int.</p>
+</div>
+<div class="entry member" id="BigInt.|"><code class="sig">op |(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.|">#</a>
+<p>The bits set in either, in two's complement.</p>
+</div>
+<div class="entry member" id="BigInt.|-2"><code class="sig">op |(other : int) : BigInt</code><a class="anchor" href="#BigInt.|-2">#</a>
+<p>| with an int.</p>
+</div>
+<div class="entry member" id="BigInt.^"><code class="sig">op ^(other : BigInt) : BigInt</code><a class="anchor" href="#BigInt.^">#</a>
+<p>The bits set in one but not both, in two's complement.</p>
+</div>
+<div class="entry member" id="BigInt.^-2"><code class="sig">op ^(other : int) : BigInt</code><a class="anchor" href="#BigInt.^-2">#</a>
+<p>^ with an int.</p>
+</div>
+<div class="entry member" id="BigInt.unary~"><code class="sig">op ~() : BigInt</code><a class="anchor" href="#BigInt.unary~">#</a>
+<p>Every bit turned round: -this - 1.</p>
+</div>
+<div class="entry member" id="BigInt.testBit"><code class="sig">fun testBit(n : int) : bool</code><a class="anchor" href="#BigInt.testBit">#</a>
+<p>Whether bit <code>n</code> (0 the lowest) is set, in two's complement.</p>
+</div>
+<div class="entry member" id="BigInt.compareTo"><code class="sig">fun compareTo(other : BigInt) : int</code><a class="anchor" href="#BigInt.compareTo">#</a>
+<p>-1, 0 or 1, as it is below, equal to or above <code>other</code>.</p>
+</div>
+<div class="entry member" id="BigInt.compareTo-2"><code class="sig">fun compareTo(other : int) : int</code><a class="anchor" href="#BigInt.compareTo-2">#</a>
+<p>compareTo an int.</p>
+</div>
+<div class="entry member" id="BigInt.&lt;"><code class="sig">op &lt;(other : BigInt) : bool</code><a class="anchor" href="#BigInt.&lt;">#</a>
+<p>Whether it is below <code>other</code>.</p>
+</div>
+<div class="entry member" id="BigInt.&lt;-2"><code class="sig">op &lt;(other : int) : bool</code><a class="anchor" href="#BigInt.&lt;-2">#</a>
+<p>Whether it is below the int.</p>
+</div>
+<div class="entry member" id="BigInt.&lt;="><code class="sig">op &lt;=(other : BigInt) : bool</code><a class="anchor" href="#BigInt.&lt;=">#</a>
+<p>Whether it is below <code>other</code> or equal.</p>
+</div>
+<div class="entry member" id="BigInt.&lt;=-2"><code class="sig">op &lt;=(other : int) : bool</code><a class="anchor" href="#BigInt.&lt;=-2">#</a>
+<p>Whether it is below the int or equal.</p>
+</div>
+<div class="entry member" id="BigInt.&gt;"><code class="sig">op &gt;(other : BigInt) : bool</code><a class="anchor" href="#BigInt.&gt;">#</a>
+<p>Whether it is above <code>other</code>.</p>
+</div>
+<div class="entry member" id="BigInt.&gt;-2"><code class="sig">op &gt;(other : int) : bool</code><a class="anchor" href="#BigInt.&gt;-2">#</a>
+<p>Whether it is above the int.</p>
+</div>
+<div class="entry member" id="BigInt.&gt;="><code class="sig">op &gt;=(other : BigInt) : bool</code><a class="anchor" href="#BigInt.&gt;=">#</a>
+<p>Whether it is above <code>other</code> or equal.</p>
+</div>
+<div class="entry member" id="BigInt.&gt;=-2"><code class="sig">op &gt;=(other : int) : bool</code><a class="anchor" href="#BigInt.&gt;=-2">#</a>
+<p>Whether it is above the int or equal.</p>
+</div>
+<div class="entry member" id="BigInt.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#BigInt.==">#</a>
+<p>Equal to a BigInt, an int or a float of the same whole value (exactly: no float rounding).</p>
+</div>
+<div class="entry member" id="BigInt.hashCode"><code class="sig">fun hashCode() : int</code><a class="anchor" href="#BigInt.hashCode">#</a>
+<p>Equal to an int's where it is one, so that BigInt.of(5) and 5 find each other as keys.</p>
+</div>
+<div class="entry member" id="BigInt.toInt"><code class="sig">fun toInt() : int</code><a class="anchor" href="#BigInt.toInt">#</a>
+<p>As an int; an ArithmeticException where it does not fit.</p>
+</div>
+<div class="entry member" id="BigInt.toIntOrNull"><code class="sig">fun toIntOrNull() : int?</code><a class="anchor" href="#BigInt.toIntOrNull">#</a>
+<p>As an int, null where it does not fit.</p>
+</div>
+<div class="entry member" id="BigInt.fitsInt"><code class="sig">val fitsInt : bool</code><a class="anchor" href="#BigInt.fitsInt">#</a>
+<p>Whether it fits in an int.</p>
+</div>
+<div class="entry member" id="BigInt.toFloat"><code class="sig">fun toFloat() : float</code><a class="anchor" href="#BigInt.toFloat">#</a>
+<p>The nearest float, rounded as the processor rounds (to even where halfway); an infinity past the largest.</p>
+</div>
+<div class="entry member" id="BigInt.toString"><code class="sig">fun toString(radix : int) : string</code><a class="anchor" href="#BigInt.toString">#</a>
+<p>In base <code>radix</code>, 2 to 36 (digits past 9 in small letters), a minus first where negative.</p>
+</div>
+<div class="entry member" id="BigInt.toString-2"><code class="sig">fun toString() : string</code><a class="anchor" href="#BigInt.toString-2">#</a>
+<p>In base 10, a minus first where negative.</p>
+</div>
+<div class="entry" id="int.toBigInt"><code class="sig">fun int.toBigInt() : BigInt</code><a class="anchor" href="#int.toBigInt">#</a>
+<p>Into a BigInt.</p>
+</div>
+<div class="entry" id="float.toBigInt"><code class="sig">fun float.toBigInt() : BigInt</code><a class="anchor" href="#float.toBigInt">#</a>
+<p>The whole number the float is, cut toward zero; an ArithmeticException for an infinity or NaN.</p>
+</div>
+<div class="entry" id="string.toBigInt"><code class="sig">fun string.toBigInt(radix : int = 10) : BigInt</code><a class="anchor" href="#string.toBigInt">#</a>
+<p>The number the text writes in base <code>radix</code>; a NumberFormatException for anything else.</p>
+</div>
+<div class="entry" id="string.toBigIntOrNull"><code class="sig">fun string.toBigIntOrNull(radix : int = 10) : BigInt?</code><a class="anchor" href="#string.toBigIntOrNull">#</a>
+<p>The number the text writes in base <code>radix</code>, null for anything else.</p>
+</div>
+<div class="entry" id="int.+"><code class="sig">op int.+(other : BigInt) : BigInt</code><a class="anchor" href="#int.+">#</a>
+<p>An int or a float on the left of a BigInt.</p>
+</div>
+<div class="entry" id="int.-"><code class="sig">op int.-(other : BigInt) : BigInt</code><a class="anchor" href="#int.-">#</a>
+<p>The int less a BigInt.</p>
+</div>
+<div class="entry" id="int.*"><code class="sig">op int.*(other : BigInt) : BigInt</code><a class="anchor" href="#int.*">#</a>
+<p>The int times a BigInt.</p>
+</div>
+<div class="entry" id="int./"><code class="sig">op int./(other : BigInt) : BigInt</code><a class="anchor" href="#int./">#</a>
+<p>The int divided by a BigInt, cut toward zero.</p>
+</div>
+<div class="entry" id="int.%"><code class="sig">op int.%(other : BigInt) : BigInt</code><a class="anchor" href="#int.%">#</a>
+<p>The rest after dividing the int by a BigInt.</p>
+</div>
+<div class="entry" id="int.&lt;"><code class="sig">op int.&lt;(other : BigInt) : bool</code><a class="anchor" href="#int.&lt;">#</a>
+<p>Whether the int is below the BigInt.</p>
+</div>
+<div class="entry" id="int.&lt;="><code class="sig">op int.&lt;=(other : BigInt) : bool</code><a class="anchor" href="#int.&lt;=">#</a>
+<p>Whether the int is below the BigInt or equal.</p>
+</div>
+<div class="entry" id="int.&gt;"><code class="sig">op int.&gt;(other : BigInt) : bool</code><a class="anchor" href="#int.&gt;">#</a>
+<p>Whether the int is above the BigInt.</p>
+</div>
+<div class="entry" id="int.&gt;="><code class="sig">op int.&gt;=(other : BigInt) : bool</code><a class="anchor" href="#int.&gt;=">#</a>
+<p>Whether the int is above the BigInt or equal.</p>
+</div>
+<div class="entry" id="float.+"><code class="sig">op float.+(other : BigInt) : float</code><a class="anchor" href="#float.+">#</a>
+<p>The float plus a BigInt, as a float.</p>
+</div>
+<div class="entry" id="float.-"><code class="sig">op float.-(other : BigInt) : float</code><a class="anchor" href="#float.-">#</a>
+<p>The float less a BigInt, as a float.</p>
+</div>
+<div class="entry" id="float.*"><code class="sig">op float.*(other : BigInt) : float</code><a class="anchor" href="#float.*">#</a>
+<p>The float times a BigInt, as a float.</p>
+</div>
+<div class="entry" id="float./"><code class="sig">op float./(other : BigInt) : float</code><a class="anchor" href="#float./">#</a>
+<p>The float divided by a BigInt, as a float.</p>
+</div>
+<h3>How it is worked out</h3>
 </section>
 <section class="file" id="file-bits-ww">
 <h2>bits.ww</h2>
@@ -1524,6 +1794,30 @@ rgba.copyFrom(Bytes([255]), 0, 0, 3, 4, pixels)  // every alpha 255
 <div class="entry member" id="Math.trunc"><code class="sig">fun trunc(x : Number) : float</code><a class="anchor" href="#Math.trunc">#</a>
 <p><code>x</code> with what is after the point dropped, as a float: -2.7 gives -2.0.</p>
 </div>
+<div class="entry member" id="Math.sinh"><code class="sig">fun sinh(x : Number) : float</code><a class="anchor" href="#Math.sinh">#</a>
+<p>The hyperbolic sine of <code>x</code>: (e^x - e^-x) / 2.</p>
+</div>
+<div class="entry member" id="Math.cosh"><code class="sig">fun cosh(x : Number) : float</code><a class="anchor" href="#Math.cosh">#</a>
+<p>The hyperbolic cosine of <code>x</code>: (e^x + e^-x) / 2.</p>
+</div>
+<div class="entry member" id="Math.tanh"><code class="sig">fun tanh(x : Number) : float</code><a class="anchor" href="#Math.tanh">#</a>
+<p>The hyperbolic tangent of <code>x</code>: sinh(x) / cosh(x), from -1 to 1.</p>
+</div>
+<div class="entry member" id="Math.asinh"><code class="sig">fun asinh(x : Number) : float</code><a class="anchor" href="#Math.asinh">#</a>
+<p>The number whose hyperbolic sine is <code>x</code>.</p>
+</div>
+<div class="entry member" id="Math.acosh"><code class="sig">fun acosh(x : Number) : float</code><a class="anchor" href="#Math.acosh">#</a>
+<p>The number of 0 or more whose hyperbolic cosine is <code>x</code>; NaN below 1.</p>
+</div>
+<div class="entry member" id="Math.atanh"><code class="sig">fun atanh(x : Number) : float</code><a class="anchor" href="#Math.atanh">#</a>
+<p>The number whose hyperbolic tangent is <code>x</code>; an infinity at -1 and 1, NaN outside them.</p>
+</div>
+<div class="entry member" id="Math.expm1"><code class="sig">fun expm1(x : Number) : float</code><a class="anchor" href="#Math.expm1">#</a>
+<p>e to the power <code>x</code>, less 1: exact where <code>x</code> is near 0, where exp(x) - 1 loses its digits.</p>
+</div>
+<div class="entry member" id="Math.log1p"><code class="sig">fun log1p(x : Number) : float</code><a class="anchor" href="#Math.log1p">#</a>
+<p>The natural logarithm of 1 + <code>x</code>: exact where <code>x</code> is near 0.</p>
+</div>
 <div class="entry member" id="Math.floor"><code class="sig">fun floor(x : Number) : int</code><a class="anchor" href="#Math.floor">#</a>
 <p>The nearest int at or below <code>x</code>: -2.5 gives -3. An ArithmeticException for NaN, infinity, or a float too large for an int; the same holds for ceil and round.</p>
 </div>
@@ -1682,6 +1976,188 @@ rgba.copyFrom(Bytes([255]), 0, 0, 3, 4, pixels)  // every alpha 255
 </div>
 <div class="entry member" id="LineIndex.checkpointCount"><code class="sig">val checkpointCount : int</code><a class="anchor" href="#LineIndex.checkpointCount">#</a>
 <p>How many line starts it keeps: line 0's and one for every checkpointInterval lines after it, which is what its memory grows with.</p>
+</div>
+</section>
+<section class="file" id="file-complex-ww">
+<h2>complex.ww</h2>
+<h3>Complex numbers (2026-11-19)</h3>
+<p>A complex number: a real part and an imaginary part, two floats, held as a value (no object of its own, copied where it is passed). The functions follow C99's and Python's cmath: their branch cuts are the same, signed zeros read the same way (1 - z keeps the sign of z's imaginary zero turned round, as a real number less a complex one does there).</p>
+<pre>val z = Complex.of(3, 4)                    // 3.0+4.0i
+print(z.abs(), z * Complex.i, 1 / z, z.sqrt(), Complex.of(-1).sqrt())
+print(Complex.i.pow(2) == -1)               // true
+print(Complex.fromPolar(2, Math.pi / 2))    // 1.2246467991473532e-16+2.0i
+</pre>
+<p>It mixes with ints and floats on either side; a complex number whose imaginary part is 0 is equal to the real number of its real part (Complex.of(3) == 3), and finds it as a key.</p>
+<div class="entry" id="Complex"><code class="sig">value Complex(val re : float, val im : float)</code><a class="anchor" href="#Complex">#</a>
+<p>A complex number, re + im i, two floats held as a value.</p>
+</div>
+<div class="entry member" id="Complex.of"><code class="sig">fun of(re : Number, im : Number = 0) : Complex</code><a class="anchor" href="#Complex.of">#</a>
+<p>The number <code>re</code> + <code>im</code> i, from ints or floats.</p>
+</div>
+<div class="entry member" id="Complex.fromPolar"><code class="sig">fun fromPolar(r : Number, theta : Number) : Complex</code><a class="anchor" href="#Complex.fromPolar">#</a>
+<p>The number of size <code>r</code> at the angle <code>theta</code> (radians) from the real axis.</p>
+</div>
+<div class="entry member" id="Complex.zero"><code class="sig">val zero : Complex</code><a class="anchor" href="#Complex.zero">#</a>
+<p>0.</p>
+</div>
+<div class="entry member" id="Complex.one"><code class="sig">val one : Complex</code><a class="anchor" href="#Complex.one">#</a>
+<p>1.</p>
+</div>
+<div class="entry member" id="Complex.i"><code class="sig">val i : Complex</code><a class="anchor" href="#Complex.i">#</a>
+<p>The imaginary unit: i * i is -1.</p>
+</div>
+<div class="entry member" id="Complex.+"><code class="sig">op +(other : Complex) : Complex</code><a class="anchor" href="#Complex.+">#</a>
+<p>The sum.</p>
+</div>
+<div class="entry member" id="Complex.+-2"><code class="sig">op +(other : float) : Complex</code><a class="anchor" href="#Complex.+-2">#</a>
+<p>The sum with a float.</p>
+</div>
+<div class="entry member" id="Complex.+-3"><code class="sig">op +(other : int) : Complex</code><a class="anchor" href="#Complex.+-3">#</a>
+<p>The sum with an int.</p>
+</div>
+<div class="entry member" id="Complex.-"><code class="sig">op -(other : Complex) : Complex</code><a class="anchor" href="#Complex.-">#</a>
+<p>The difference.</p>
+</div>
+<div class="entry member" id="Complex.--2"><code class="sig">op -(other : float) : Complex</code><a class="anchor" href="#Complex.--2">#</a>
+<p>The difference with a float.</p>
+</div>
+<div class="entry member" id="Complex.--3"><code class="sig">op -(other : int) : Complex</code><a class="anchor" href="#Complex.--3">#</a>
+<p>The difference with an int.</p>
+</div>
+<div class="entry member" id="Complex.unary-"><code class="sig">op -() : Complex</code><a class="anchor" href="#Complex.unary-">#</a>
+<p>The number with both parts' signs turned round.</p>
+</div>
+<div class="entry member" id="Complex.*"><code class="sig">op *(other : Complex) : Complex</code><a class="anchor" href="#Complex.*">#</a>
+<p>The product.</p>
+</div>
+<div class="entry member" id="Complex.*-2"><code class="sig">op *(other : float) : Complex</code><a class="anchor" href="#Complex.*-2">#</a>
+<p>The product with a float.</p>
+</div>
+<div class="entry member" id="Complex.*-3"><code class="sig">op *(other : int) : Complex</code><a class="anchor" href="#Complex.*-3">#</a>
+<p>The product with an int.</p>
+</div>
+<div class="entry member" id="Complex./"><code class="sig">op /(other : Complex) : Complex</code><a class="anchor" href="#Complex./">#</a>
+<p>Divided by Smith's way, which neither overflows nor underflows on the way where the answer itself does not.</p>
+</div>
+<div class="entry member" id="Complex./-2"><code class="sig">op /(other : float) : Complex</code><a class="anchor" href="#Complex./-2">#</a>
+<p>Divided by a float.</p>
+</div>
+<div class="entry member" id="Complex./-3"><code class="sig">op /(other : int) : Complex</code><a class="anchor" href="#Complex./-3">#</a>
+<p>Divided by an int.</p>
+</div>
+<div class="entry member" id="Complex.abs"><code class="sig">fun abs() : float</code><a class="anchor" href="#Complex.abs">#</a>
+<p>Its size: the distance from 0, without overflow on the way.</p>
+</div>
+<div class="entry member" id="Complex.arg"><code class="sig">fun arg() : float</code><a class="anchor" href="#Complex.arg">#</a>
+<p>Its angle from the positive real axis, in radians, from -pi to pi.</p>
+</div>
+<div class="entry member" id="Complex.conjugate"><code class="sig">fun conjugate() : Complex</code><a class="anchor" href="#Complex.conjugate">#</a>
+<p>Its mirror in the real axis: the imaginary part's sign turned round.</p>
+</div>
+<div class="entry member" id="Complex.reciprocal"><code class="sig">fun reciprocal() : Complex</code><a class="anchor" href="#Complex.reciprocal">#</a>
+<p>1 divided by it.</p>
+</div>
+<div class="entry member" id="Complex.isNaN"><code class="sig">fun isNaN() : bool</code><a class="anchor" href="#Complex.isNaN">#</a>
+<p>Whether either part is NaN.</p>
+</div>
+<div class="entry member" id="Complex.isInfinite"><code class="sig">fun isInfinite() : bool</code><a class="anchor" href="#Complex.isInfinite">#</a>
+<p>Whether either part is an infinity (and neither NaN).</p>
+</div>
+<div class="entry member" id="Complex.pow"><code class="sig">fun pow(n : int) : Complex</code><a class="anchor" href="#Complex.pow">#</a>
+<p>To the power <code>n</code>, worked out by multiplying (exactly where the parts are whole and small: i to the power 2 is -1, not nearly); a negative <code>n</code> gives 1 over the power.</p>
+</div>
+<div class="entry member" id="Complex.pow-2"><code class="sig">fun pow(w : Complex) : Complex</code><a class="anchor" href="#Complex.pow-2">#</a>
+<p>To the power <code>w</code>: e to the power w * log(this). 0 to a power whose real part is above 0 is 0, and anything to the power 0 is 1.</p>
+</div>
+<div class="entry member" id="Complex.pow-3"><code class="sig">fun pow(x : float) : Complex</code><a class="anchor" href="#Complex.pow-3">#</a>
+<p>To the power of a float <code>x</code>: e to the power x * log(this).</p>
+</div>
+<div class="entry member" id="Complex.sqrt"><code class="sig">fun sqrt() : Complex</code><a class="anchor" href="#Complex.sqrt">#</a>
+<p>The principal square root: its real part 0 or more, the cut along the negative real axis (-1+0.0i gives i, -1-0.0i gives -i).</p>
+</div>
+<div class="entry member" id="Complex.exp"><code class="sig">fun exp() : Complex</code><a class="anchor" href="#Complex.exp">#</a>
+<p>e to its power.</p>
+</div>
+<div class="entry member" id="Complex.log"><code class="sig">fun log() : Complex</code><a class="anchor" href="#Complex.log">#</a>
+<p>The natural logarithm, its imaginary part from -pi to pi (the cut along the negative real axis).</p>
+</div>
+<div class="entry member" id="Complex.log10"><code class="sig">fun log10() : Complex</code><a class="anchor" href="#Complex.log10">#</a>
+<p>The logarithm in base 10.</p>
+</div>
+<div class="entry member" id="Complex.sin"><code class="sig">fun sin() : Complex</code><a class="anchor" href="#Complex.sin">#</a>
+<p>The sine.</p>
+</div>
+<div class="entry member" id="Complex.cos"><code class="sig">fun cos() : Complex</code><a class="anchor" href="#Complex.cos">#</a>
+<p>The cosine.</p>
+</div>
+<div class="entry member" id="Complex.tan"><code class="sig">fun tan() : Complex</code><a class="anchor" href="#Complex.tan">#</a>
+<p>The tangent.</p>
+</div>
+<div class="entry member" id="Complex.sinh"><code class="sig">fun sinh() : Complex</code><a class="anchor" href="#Complex.sinh">#</a>
+<p>The hyperbolic sine.</p>
+</div>
+<div class="entry member" id="Complex.cosh"><code class="sig">fun cosh() : Complex</code><a class="anchor" href="#Complex.cosh">#</a>
+<p>The hyperbolic cosine.</p>
+</div>
+<div class="entry member" id="Complex.tanh"><code class="sig">fun tanh() : Complex</code><a class="anchor" href="#Complex.tanh">#</a>
+<p>The hyperbolic tangent; exact far from 0, where the parts' exponentials would overflow.</p>
+</div>
+<div class="entry member" id="Complex.asin"><code class="sig">fun asin() : Complex</code><a class="anchor" href="#Complex.asin">#</a>
+<p>The inverse functions, each the principal value, their cuts where C99 puts them.</p>
+</div>
+<div class="entry member" id="Complex.acos"><code class="sig">fun acos() : Complex</code><a class="anchor" href="#Complex.acos">#</a>
+<p>The inverse cosine, its real part from 0 to pi.</p>
+</div>
+<div class="entry member" id="Complex.atan"><code class="sig">fun atan() : Complex</code><a class="anchor" href="#Complex.atan">#</a>
+<p>The inverse tangent.</p>
+</div>
+<div class="entry member" id="Complex.asinh"><code class="sig">fun asinh() : Complex</code><a class="anchor" href="#Complex.asinh">#</a>
+<p>The inverse hyperbolic sine.</p>
+</div>
+<div class="entry member" id="Complex.acosh"><code class="sig">fun acosh() : Complex</code><a class="anchor" href="#Complex.acosh">#</a>
+<p>The inverse hyperbolic cosine, its real part 0 or more.</p>
+</div>
+<div class="entry member" id="Complex.atanh"><code class="sig">fun atanh() : Complex</code><a class="anchor" href="#Complex.atanh">#</a>
+<p>The inverse hyperbolic tangent.</p>
+</div>
+<div class="entry member" id="Complex.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#Complex.==">#</a>
+<p>Equal to a Complex of equal parts, or to an int or float equal to its real part where its imaginary part is 0. NaN in either part is equal to nothing, as a float NaN is.</p>
+</div>
+<div class="entry member" id="Complex.hashCode"><code class="sig">fun hashCode() : int</code><a class="anchor" href="#Complex.hashCode">#</a>
+<p>A real one's is its real part's, so that Complex.of(3) and 3 find each other as keys.</p>
+</div>
+<div class="entry member" id="Complex.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#Complex.toString">#</a>
+<p>As &quot;3.0+4.0i&quot;, &quot;3.0-4.0i&quot;.</p>
+</div>
+<div class="entry" id="int.toComplex"><code class="sig">fun int.toComplex() : Complex</code><a class="anchor" href="#int.toComplex">#</a>
+<p>Into a Complex: the number with an imaginary part of 0.</p>
+</div>
+<div class="entry" id="float.toComplex"><code class="sig">fun float.toComplex() : Complex</code><a class="anchor" href="#float.toComplex">#</a>
+<p>The float with an imaginary part of 0.</p>
+</div>
+<div class="entry" id="int.+"><code class="sig">op int.+(other : Complex) : Complex</code><a class="anchor" href="#int.+">#</a>
+<p>An int or a float on the left of a Complex: the real number's imaginary part a 0 with no sign to give (x - z keeps z's imaginary part turned round, -0.0 for a 0.0, as C99's does).</p>
+</div>
+<div class="entry" id="int.-"><code class="sig">op int.-(other : Complex) : Complex</code><a class="anchor" href="#int.-">#</a>
+<p>The int less a Complex.</p>
+</div>
+<div class="entry" id="int.*"><code class="sig">op int.*(other : Complex) : Complex</code><a class="anchor" href="#int.*">#</a>
+<p>The int times a Complex.</p>
+</div>
+<div class="entry" id="int./"><code class="sig">op int./(other : Complex) : Complex</code><a class="anchor" href="#int./">#</a>
+<p>The int divided by a Complex.</p>
+</div>
+<div class="entry" id="float.+"><code class="sig">op float.+(other : Complex) : Complex</code><a class="anchor" href="#float.+">#</a>
+<p>The float plus a Complex.</p>
+</div>
+<div class="entry" id="float.-"><code class="sig">op float.-(other : Complex) : Complex</code><a class="anchor" href="#float.-">#</a>
+<p>The float less a Complex.</p>
+</div>
+<div class="entry" id="float.*"><code class="sig">op float.*(other : Complex) : Complex</code><a class="anchor" href="#float.*">#</a>
+<p>The float times a Complex.</p>
+</div>
+<div class="entry" id="float./"><code class="sig">op float./(other : Complex) : Complex</code><a class="anchor" href="#float./">#</a>
+<p>The float divided by a Complex.</p>
 </div>
 </section>
 <section class="file" id="file-core-ww">
@@ -3636,16 +4112,20 @@ if (result.exitCode == 0) { print(result.output) }
 </div>
 <h3>Sockets</h3>
 <div class="entry" id="Socket"><code class="sig">class Socket : AutoCloseable</code><a class="anchor" href="#Socket">#</a>
-<p>One end of a TCP connection.</p>
+<p>One end of a TCP connection, or of a Unix domain socket's: given a FilePath where a host and a port go, the connection is to the socket file of that path, which a program on this machine listens on (a ServerSocket given the same path). Both are read and written alike.</p>
 <pre>Socket(&quot;example.org&quot;, 80).use { socket -&gt;
   socket.writer.write(&quot;GET / HTTP/1.0\r\n\r\n&quot;)
   print(socket.reader.readLine())
 }
+Socket(FilePath(&quot;/run/app.sock&quot;)).use { it.writer.write(&quot;status\n&quot;) }
 </pre>
-<p>Its reads and writes block the thread they run on; a server serves each connection from a thread or a pool's job.</p>
+<p>Its reads and writes block the thread they run on; a server serves each connection from a thread or a pool's job. Unix domain sockets are the system's own: on Linux, macOS and Windows (10, from version 1803; a path at most 107 bytes long there as everywhere).</p>
 </div>
 <div class="entry member" id="Socket.connect"><code class="sig">fun connect(host : string, port : int, timeout : Duration? = null) : Socket throws IOException</code><a class="anchor" href="#Socket.connect">#</a>
 <p>With a time limit, gives up when it runs out.</p>
+</div>
+<div class="entry member" id="Socket.connect-2"><code class="sig">fun connect(path : FilePath, timeout : Duration? = null) : Socket throws IOException</code><a class="anchor" href="#Socket.connect-2">#</a>
+<p>To the Unix domain socket whose file is <code>path</code> (2026-11-19); with a time limit, gives up when it runs out. Not in a sandbox, which reaches no socket but its own (an IOException).</p>
 </div>
 <div class="entry member" id="Socket.reader"><code class="sig">val reader : Reader</code><a class="anchor" href="#Socket.reader">#</a>
 <p>What comes from the other side, and what goes to it.</p>
@@ -3660,13 +4140,16 @@ if (result.exitCode == 0) { print(result.output) }
 <p>Whether it was connected and has been closed since; false for one never connected.</p>
 </div>
 <div class="entry member" id="Socket.localPort"><code class="sig">val localPort : int</code><a class="anchor" href="#Socket.localPort">#</a>
-<p>The port of this end of the connection. An IllegalStateException while the socket is not connected, an IOException once it is closed.</p>
+<p>The port of this end of the connection. An IllegalStateException while the socket is not connected, or where it is a Unix domain socket's (which has a path, no port), an IOException once it is closed.</p>
 </div>
 <div class="entry member" id="Socket.remoteAddress"><code class="sig">val remoteAddress : string</code><a class="anchor" href="#Socket.remoteAddress">#</a>
 <p>The address of the other side, as &quot;127.0.0.1&quot;; the same errors as localPort.</p>
 </div>
 <div class="entry member" id="Socket.port"><code class="sig">val port : int</code><a class="anchor" href="#Socket.port">#</a>
 <p>The port of the other side; the same errors as localPort.</p>
+</div>
+<div class="entry member" id="Socket.path"><code class="sig">val path : FilePath?</code><a class="anchor" href="#Socket.path">#</a>
+<p>The file of a Unix domain socket's connection; null for a TCP one, or a socket not connected.</p>
 </div>
 <div class="entry member" id="Socket.readTimeout"><code class="sig">var readTimeout : Duration?</code><a class="anchor" href="#Socket.readTimeout">#</a>
 <p>How long a read waits before it fails with a SocketTimeoutException, an IOException; null for as long as it takes (Java's soTimeout). It can be set before connect().</p>
@@ -3678,17 +4161,21 @@ if (result.exitCode == 0) { print(result.output) }
 <p>Closes the connection; closing it again, or a socket never connected, does nothing.</p>
 </div>
 <div class="entry" id="ServerSocket"><code class="sig">class ServerSocket : AutoCloseable</code><a class="anchor" href="#ServerSocket">#</a>
-<p>A socket that waits for connections to this machine.</p>
+<p>A socket that waits for connections to this machine: at a port, or at a Unix domain socket's file, given a FilePath in place of the port (2026-11-19).</p>
 <pre>val server = ServerSocket(8080)
 while (true) {
   val client = server.accept()          // a Socket
   thread { serve(client) }
 }
+val local = ServerSocket(FilePath(&quot;/run/app.sock&quot;))   // for programs on this machine alone
 </pre>
-<p>Port 0 lets the system pick a free one (see localPort). With no address it takes connections from anywhere; &quot;127.0.0.1&quot; keeps it to programs on this machine.</p>
+<p>Port 0 lets the system pick a free one (see localPort). With no address it takes connections from anywhere; &quot;127.0.0.1&quot; keeps it to programs on this machine. A Unix domain socket's file is made as it starts listening (an IOException where a file of that name is there already: one an earlier program left is deleted first) and removed as it is closed; who may connect is who may open that file.</p>
 </div>
 <div class="entry member" id="ServerSocket.localPort"><code class="sig">val localPort : int</code><a class="anchor" href="#ServerSocket.localPort">#</a>
-<p>The port it listens on, the one the system picked where it was made with port 0; an IOException once it is closed.</p>
+<p>The port it listens on, the one the system picked where it was made with port 0; an IllegalStateException where it listens at a Unix domain socket's file, an IOException once it is closed.</p>
+</div>
+<div class="entry member" id="ServerSocket.path"><code class="sig">val path : FilePath?</code><a class="anchor" href="#ServerSocket.path">#</a>
+<p>The file it listens at, for a Unix domain socket; null where it listens on a port.</p>
 </div>
 <div class="entry member" id="ServerSocket.isClosed"><code class="sig">val isClosed : bool</code><a class="anchor" href="#ServerSocket.isClosed">#</a>
 <p>Whether it has been closed.</p>
@@ -4081,10 +4568,10 @@ val local = path.lastModified()!!.toLocalDateTime()
 <div class="entry member" id="LocalDate.dayOfYear"><code class="sig">val dayOfYear : int</code><a class="anchor" href="#LocalDate.dayOfYear">#</a>
 <p>The day of the year, from 1.</p>
 </div>
-<div class="entry member" id="LocalDate.&lt;"><code class="sig">op &lt;(other : LocalDate) : bool =&gt; compareTo(other) &lt; 0  op &lt;=(other : LocalDate) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDate) : bool =&gt; compareTo(other) &gt; 0</code><a class="anchor" href="#LocalDate.&lt;">#</a>
+<div class="entry member" id="LocalDate.&lt;"><code class="sig">op &lt;(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&lt;">#</a>
 <p>Whether this date comes before <code>other</code>.</p>
 </div>
-<div class="entry member" id="LocalDate.&lt;="><code class="sig">op &lt;=(other : LocalDate) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&lt;=">#</a>
+<div class="entry member" id="LocalDate.&lt;="><code class="sig">op &lt;=(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&lt;=">#</a>
 <p>Whether this date comes before <code>other</code> or is the same.</p>
 </div>
 <div class="entry member" id="LocalDate.&gt;"><code class="sig">op &gt;(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&gt;">#</a>
@@ -4108,10 +4595,10 @@ val local = path.lastModified()!!.toLocalDateTime()
 <div class="entry" id="LocalTime"><code class="sig">value LocalTime(val hour : int, val minute : int, val second : int = 0, val nanosecond : int = 0)</code><a class="anchor" href="#LocalTime">#</a>
 <p>A time of day: its hour (0 to 23), minute, second and the nanoseconds past that second.</p>
 </div>
-<div class="entry member" id="LocalTime.&lt;"><code class="sig">op &lt;(other : LocalTime) : bool =&gt; compareTo(other) &lt; 0  op &lt;=(other : LocalTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalTime) : bool =&gt; compareTo(other) &gt; 0</code><a class="anchor" href="#LocalTime.&lt;">#</a>
+<div class="entry member" id="LocalTime.&lt;"><code class="sig">op &lt;(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&lt;">#</a>
 <p>Whether this time comes before <code>other</code>.</p>
 </div>
-<div class="entry member" id="LocalTime.&lt;="><code class="sig">op &lt;=(other : LocalTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&lt;=">#</a>
+<div class="entry member" id="LocalTime.&lt;="><code class="sig">op &lt;=(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&lt;=">#</a>
 <p>Whether this time comes before <code>other</code> or is the same.</p>
 </div>
 <div class="entry member" id="LocalTime.&gt;"><code class="sig">op &gt;(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&gt;">#</a>
@@ -4147,10 +4634,10 @@ val local = path.lastModified()!!.toLocalDateTime()
 <div class="entry member" id="LocalDateTime.dayOfYear"><code class="sig">val dayOfYear : int</code><a class="anchor" href="#LocalDateTime.dayOfYear">#</a>
 <p>The day of the year, from 1.</p>
 </div>
-<div class="entry member" id="LocalDateTime.&lt;"><code class="sig">op &lt;(other : LocalDateTime) : bool =&gt; compareTo(other) &lt; 0  op &lt;=(other : LocalDateTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDateTime) : bool =&gt; compareTo(other) &gt; 0</code><a class="anchor" href="#LocalDateTime.&lt;">#</a>
+<div class="entry member" id="LocalDateTime.&lt;"><code class="sig">op &lt;(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&lt;">#</a>
 <p>Whether this date and time comes before <code>other</code>.</p>
 </div>
-<div class="entry member" id="LocalDateTime.&lt;="><code class="sig">op &lt;=(other : LocalDateTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&lt;=">#</a>
+<div class="entry member" id="LocalDateTime.&lt;="><code class="sig">op &lt;=(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&lt;=">#</a>
 <p>Whether this date and time comes before <code>other</code> or is the same.</p>
 </div>
 <div class="entry member" id="LocalDateTime.&gt;"><code class="sig">op &gt;(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&gt;">#</a>
@@ -7297,10 +7784,10 @@ val frame = 1.seconds / 60          // 16.666666ms
 <div class="entry member" id="Duration./-3"><code class="sig">op /(other : Duration) : float</code><a class="anchor" href="#Duration./-3">#</a>
 <p>How many times the other fits in this one.</p>
 </div>
-<div class="entry member" id="Duration.&lt;"><code class="sig">op &lt;(other : Duration) : bool =&gt; inNanoseconds &lt; other.inNanoseconds  op &lt;=(other : Duration) : bool =&gt; inNanoseconds &lt;= other.inNanoseconds  op &gt;(other : Duration) : bool =&gt; inNanoseconds &gt; other.inNanoseconds</code><a class="anchor" href="#Duration.&lt;">#</a>
+<div class="entry member" id="Duration.&lt;"><code class="sig">op &lt;(other : Duration) : bool</code><a class="anchor" href="#Duration.&lt;">#</a>
 <p>Whether this length is shorter than the other.</p>
 </div>
-<div class="entry member" id="Duration.&lt;="><code class="sig">op &lt;=(other : Duration) : bool =&gt; inNanoseconds &lt;= other.inNanoseconds  op &gt;(other : Duration) : bool</code><a class="anchor" href="#Duration.&lt;=">#</a>
+<div class="entry member" id="Duration.&lt;="><code class="sig">op &lt;=(other : Duration) : bool</code><a class="anchor" href="#Duration.&lt;=">#</a>
 <p>Whether this length is shorter than the other or as long.</p>
 </div>
 <div class="entry member" id="Duration.&gt;"><code class="sig">op &gt;(other : Duration) : bool</code><a class="anchor" href="#Duration.&gt;">#</a>
@@ -7406,10 +7893,10 @@ print(path.lastModified())                  // 2026-11-02T14:05:31.250Z
 <div class="entry member" id="Instant.--2"><code class="sig">op -(other : Instant) : Duration</code><a class="anchor" href="#Instant.--2">#</a>
 <p>How long after <code>other</code> this is: negative where it is before.</p>
 </div>
-<div class="entry member" id="Instant.&lt;"><code class="sig">op &lt;(other : Instant) : bool =&gt; epochNanoseconds &lt; other.epochNanoseconds  op &lt;=(other : Instant) : bool =&gt; epochNanoseconds &lt;= other.epochNanoseconds  op &gt;(other : Instant) : bool =&gt; epochNanoseconds &gt; other.epochNanoseconds</code><a class="anchor" href="#Instant.&lt;">#</a>
+<div class="entry member" id="Instant.&lt;"><code class="sig">op &lt;(other : Instant) : bool</code><a class="anchor" href="#Instant.&lt;">#</a>
 <p>Whether this is before <code>other</code>.</p>
 </div>
-<div class="entry member" id="Instant.&lt;="><code class="sig">op &lt;=(other : Instant) : bool =&gt; epochNanoseconds &lt;= other.epochNanoseconds  op &gt;(other : Instant) : bool</code><a class="anchor" href="#Instant.&lt;=">#</a>
+<div class="entry member" id="Instant.&lt;="><code class="sig">op &lt;=(other : Instant) : bool</code><a class="anchor" href="#Instant.&lt;=">#</a>
 <p>Whether this is before <code>other</code> or the same moment.</p>
 </div>
 <div class="entry member" id="Instant.&gt;"><code class="sig">op &gt;(other : Instant) : bool</code><a class="anchor" href="#Instant.&gt;">#</a>

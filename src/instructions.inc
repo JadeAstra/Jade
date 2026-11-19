@@ -1360,6 +1360,17 @@ LABEL(plainEq) {
         LOAD_FRAME();
         DONE();
     }
+    // A plain value (a number, a string) against an object whose class says what == means: its
+    // == decides, as it does the other way round (2026-11-19: `5 == BigInt.of(5)`).
+    if (classOf(a) == nullptr)
+        if (const ObjClass* k = classOf(b); k != nullptr && k->methods.find(names.opEq) != nullptr) {
+            sp_[-2] = b;
+            sp_[-1] = a;
+            SAVE_IP();
+            invokeOperator(b, names.opEq, 1);
+            LOAD_FRAME();
+            DONE();
+        }
     if ((a.isRef() || b.isRef() || a.isSmall() || b.isSmall()) ||
         (a.isObj() && b.isObj() && a.as.obj != b.as.obj && a.as.obj->type != ObjType::String)) {
         // Two lists, maps or ranges: equal if what they hold is equal.

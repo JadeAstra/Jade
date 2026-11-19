@@ -701,6 +701,22 @@ external object Math {
   fun exp(x : Number) : float
   // `x` with what is after the point dropped, as a float: -2.7 gives -2.0.
   fun trunc(x : Number) : float
+  // The hyperbolic sine of `x`: (e^x - e^-x) / 2.
+  fun sinh(x : Number) : float
+  // The hyperbolic cosine of `x`: (e^x + e^-x) / 2.
+  fun cosh(x : Number) : float
+  // The hyperbolic tangent of `x`: sinh(x) / cosh(x), from -1 to 1.
+  fun tanh(x : Number) : float
+  // The number whose hyperbolic sine is `x`.
+  fun asinh(x : Number) : float
+  // The number of 0 or more whose hyperbolic cosine is `x`; NaN below 1.
+  fun acosh(x : Number) : float
+  // The number whose hyperbolic tangent is `x`; an infinity at -1 and 1, NaN outside them.
+  fun atanh(x : Number) : float
+  // e to the power `x`, less 1: exact where `x` is near 0, where exp(x) - 1 loses its digits.
+  fun expm1(x : Number) : float
+  // The natural logarithm of 1 + `x`: exact where `x` is near 0.
+  fun log1p(x : Number) : float
 
   // The nearest int at or below `x`: -2.5 gives -3. An ArithmeticException for NaN, infinity, or
   // a float too large for an int; the same holds for ceil and round.

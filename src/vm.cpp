@@ -2019,13 +2019,26 @@ bool VM::formTakes(const FunctionProto* proto, const Value* args, int positional
 // the arguments, the one whose parameters' types fit them most narrowly; between two as
 // narrow, one without a vararg, then one that leaves fewer parameters to their defaults.
 const Value* VM::addedOperator(Value left, const Value* right, const ObjString* symbol) {
+    // Whether the operator (one form, or several) takes the right side.
+    auto takes = [&](const Value* added) {
+        if (added == nullptr || !added->isObjType(ObjType::Closure)) return false;
+        const ObjClosure* closure = asClosure(*added);
+        int score = 0, defaults = 0;
+        if (!closure->proto->chooser) return inReach(closure->proto) && formTakes(closure->proto, right, 1, nullptr, 0, score, defaults);
+        for (const ObjClosure* form : static_cast<const ObjForms*>(closure)->forms)
+            if (inReach(form->proto) && formTakes(form->proto, right, 1, nullptr, 0, score, defaults)) return true;
+        return false;
+    };
     const Value* added = findExtension(left, symbol);
-    if (added == nullptr || !added->isObjType(ObjType::Closure)) return nullptr;
-    const ObjClosure* closure = asClosure(*added);
-    int score = 0, defaults = 0;
-    if (!closure->proto->chooser) return formTakes(closure->proto, right, 1, nullptr, 0, score, defaults) ? added : nullptr;
-    for (const ObjClosure* form : static_cast<const ObjForms*>(closure)->forms)
-        if (inReach(form->proto) && formTakes(form->proto, right, 1, nullptr, 0, score, defaults)) return added;
+    if (takes(added)) return added;
+    // The int's own (op int.* for BigInt) not taking it, Number's or any's may (op Number.* for a
+    // Tensor), as the checker chose (2026-11-19).
+    if (hasExtensions_ && left.isNumber()) {
+        if (const Value* broader = typeExtensions_[kTypeNumber].find(symbol); broader != added && takes(broader)) return broader;
+    }
+    if (hasExtensions_ && !left.isNull()) {
+        if (const Value* broader = anyExtensions_.find(symbol); broader != added && takes(broader)) return broader;
+    }
     return nullptr;
 }
 
@@ -2693,6 +2706,10 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
     }
     if (method == nullptr) {
         if (const Value* extension = findExtension(receiver, name)) {
+            // An int's own forms not taking the argument, Number's may: `2 * tensor` (op
+            // Number.*) beside op int.* for BigInt, called so by the compiler (2026-11-19).
+            if (argc == 1 && !trailing && receiver.isNumber())
+                if (const Value* added = addedOperator(receiver, &sp_[-1], name)) extension = added;
             if (trailing) callTrailing(asClosure(*extension), argc);
             else callClosure(asClosure(*extension), argc);
             return true;
@@ -2804,6 +2821,20 @@ bool VM::equals(Value a, Value b, int depth) {
         TempRoot keepA(*this, a = boxed(a));
         TempRoot keepB(*this, b = boxed(b));
         return equals(a, b, depth);
+    }
+    // A number, a string or another plain value against an object whose class says what ==
+    // means: the object's == decides, either way round (2026-11-19: `5 == BigInt.of(5)` as
+    // `BigInt.of(5) == 5`; a plain value has no == of its own that knows the object).
+    if (!a.isObj() && b.isObj() &&
+        ((b.isObjType(ObjType::Instance) && asInstance(b)->cls->methods.find(names.opEq) != nullptr) ||
+         (b.isObjType(ObjType::Value) && asValue(b)->cls->methods.find(names.opEq) != nullptr)))
+        return equals(b, a, depth);
+    if (a.isObj() && !b.isObj() &&
+        ((a.isObjType(ObjType::Instance) && asInstance(a)->cls->methods.find(names.opEq) != nullptr) ||
+         (a.isObjType(ObjType::Value) && asValue(a)->cls->methods.find(names.opEq) != nullptr))) {
+        const Value* method = a.isObjType(ObjType::Instance) ? asInstance(a)->cls->methods.find(names.opEq) : asValue(a)->cls->methods.find(names.opEq);
+        TempRoot bound(*this, Value::object(alloc<ObjBoundMethod>(a, asClosure(*method))));
+        return call(bound.get(), 1, &b).truthy();
     }
     if (!a.isObj() || !b.isObj()) return valuesEqual(a, b);
     if (a.as.obj == b.as.obj) return true;

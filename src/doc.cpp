@@ -133,6 +133,8 @@ std::string declarationText(const std::vector<std::string>& lines, int first) {
         bool done = false;
         std::string part;
         char quote = 0;
+        // An operator's name, `op <<` or `op int.<`, up to its `(`: no brackets in it.
+        bool operatorName = false;
         for (size_t k = 0; k < line.size(); k++) {
             const char c = line[k];
             if (quote != 0) {
@@ -147,6 +149,15 @@ std::string declarationText(const std::vector<std::string>& lines, int first) {
                 continue;
             }
             if (c == '/' && k + 1 < line.size() && line[k + 1] == '/') break;  // a comment after it
+            if (operatorName) {
+                if (c != '(') {
+                    part += c;
+                    continue;
+                }
+                operatorName = false;
+            } else if (c == ' ' && (part == "op" || (part.size() > 3 && part.compare(part.size() - 3, 3, " op") == 0))) {
+                operatorName = true;
+            }
             if (c == '(' || c == '[' || c == '<') depth++;
             if ((c == ')' || c == ']' || c == '>') && depth > 0 && !(c == '>' && k > 0 && line[k - 1] == '-')) depth--;
             if (depth == 0 && (c == '{' || (c == '=' && k + 1 < line.size() && line[k + 1] == '>'))) {

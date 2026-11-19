@@ -80,6 +80,9 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
                report : FilePath? = null, closeAfter : int = -1) {
   var suite = Suite(start)
   var running = false
+  // A failure the table does not show: a setting run before the one shown, or a check of the
+  // whole suite (the start-up budgets). Red for it too (2026-11-19: green with something failed).
+  var failedUnshown = false
   var dirty = true
   var shown : List<Item> = []
   var chosen : Item? = null
@@ -215,7 +218,8 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     val wasColor = progress.color
     // Red for a failure, green when all passed; blue while running, whatever the system's accent
     // (an orange one read as failing, 2026-11-17).
-    val nowColor = failed > 0 ? Color(208, 52, 52) : (!running and done > 0 and done == wanted and passed + skipped == done ? Color(46, 160, 67) : Palette.selectBlue)
+    val nowColor = failed > 0 or failedUnshown ? Color(208, 52, 52) :
+                   (!running and done > 0 and done == wanted and passed + skipped == done ? Color(46, 160, 67) : Palette.selectBlue)
     if (nowColor != wasColor) { progress.color = nowColor }
     val c = chosen
     val text = c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :
@@ -236,8 +240,10 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   val stopButton = button("Stop") { suite.stop() }
   stopButton.enabled = false
 
-  fun runThese(which : List<Item>) {
+  // `fresh`: a run of its own, from a button; one setting of several run one after another is not.
+  fun runThese(which : List<Item>, fresh : bool = true) {
     if (running or which.isEmpty()) { return }
+    if (fresh) { failedUnshown = false }
     refreshSuite()
     // The same checks in the new suite.
     val names = which.map { it.name }
@@ -381,13 +387,17 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       for (b in wayBoxes) { b.checked = b === wayBoxes[Way.script.ordinal] }
     }
     refreshSuite()
-    runThese(only == null ? suite.items : suite.items.filter { it.name in only!! })
+    runThese(only == null ? suite.items : suite.items.filter { it.name in only!! }, fresh = false)
   }
   afterRun = {
     if (atOnce.isNotEmpty()) {
       val names = only
       val (text, ok) = reportOf(names == null ? suite.items : suite.items.filter { it.name in names })
-      if (!ok) { allPassed = false }
+      if (!ok) {
+        allPassed = false
+        failedUnshown = true
+        dirty = true
+      }
       if (atOnce.size > 1) { said.add("== " + (atOnce.size - left.size == 1 ? "the suite" : settingName(atOnce[atOnce.size - left.size - 1]))) }
       said.add(text)
       if (left.isNotEmpty()) {
