@@ -254,8 +254,8 @@ void VM::releaseLock() {
     {
         std::lock_guard<std::mutex> hold(lockMutex_);
         lockHeld_ = false;
+        lockFree_.notify_one();   // inside, as at a thread's end (threadMain)
     }
-    lockFree_.notify_one();
 }
 
 void VM::acquireLock(ThreadState* me) {
@@ -524,12 +524,17 @@ void VM::threadMain(ThreadState* me) {
     handlers_.clear();
     tempRoots.clear();
     tempVectors.clear();
+    // Giving up the lock is the last this thread does with the VM: no longer among its threads,
+    // it no longer keeps the VM alive, and the thread that takes the lock next may take the VM
+    // apart (a worker's, ending with its last thread). So the loop is woken first (it waits for
+    // the lock to see that this one has ended), and the next thread told inside the lock's mutex
+    // (2026-11-19: woken after, the loop of a worker that had already ended crashed now and then).
+    wakeLoop();
     {
         std::lock_guard<std::mutex> hold(lockMutex_);
         lockHeld_ = false;
+        lockFree_.notify_one();
     }
-    lockFree_.notify_one();
-    wakeLoop();
     delete me;
 }
 

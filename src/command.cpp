@@ -354,8 +354,9 @@ const HelpEntry kHelp[] = {
      "  WW_TIMES=1                   how long the program took to be ready to run, and its parts, on standard error\n"
      "For testing ww itself: WW_GC_STRESS=1 (a collection at every safe point), WW_THREAD_STRESS=1 (threads change\n"
      "at every safe point), WW_CHECK_NATIVE_RESULTS=1 (every C++ function's result checked against its declaration),\n"
-     "WW_COPY_READS=1 (every read from a list of values a copy). Others, for working on native code, are described\n"
-     "where src/ reads them."},
+     "WW_COPY_READS=1 (every read from a list of values a copy), WW_CRASH_STACK=1 (on Windows, a crash writes the\n"
+     "calls the crashing thread was in to standard error, for cdb's ln to name). Others, for working on native code,\n"
+     "are described where src/ reads them."},
 };
 
 std::string helpOverview() {
