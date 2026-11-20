@@ -100,7 +100,7 @@ pre code { background: none; padding: 0; }
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (forty-four)</li>
+<li><a href="#decide">Waiting for the user</a> (forty-five)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (fourteen)</li>
@@ -388,6 +388,14 @@ pre code { background: none; padding: 0; }
 <p class="status"><span class="label">Recommended</span> Done</p>
 <p>At the user's word (2026-11-20: "No sampling profiler exists for WinterWolf functions yet. Fix this"), as a port to WinterWolf of an x86 emulator written in Kotlin (toww) ran 45 times slower than the Kotlin and there was nothing to say where its time went. Built 2026-11-20 (0.9.5043) in <code>src/profile.cpp</code>: <code>ww --profile[=file] program.ww</code>, or <code>WW_PROFILE=file</code>. A clock thread (a high-resolution waitable timer on Windows, whose plain waits wake every 15.6 ms) asks the program's VM for a sample every millisecond (<code>WW_PROFILE_INTERVAL</code> in microseconds); the VM takes it at its next safe point (<code>VM::takeSample</code>, from <code>safePoint</code>), where the calls under way are where they are, functions put in place of their calls counted as the calls they were and a lambda named by its line. As the program ends (the <code>_Exit</code> ways out too) the report is written: the threads, the functions by their own time and by their total time, and the lines by their own time; and the stacks beside it (<code>file.folded</code>) for a flame graph, which speedscope.app or flamegraph.pl draw. <code>tests/profile.ww</code>.</p>
 <p>What it cannot see: a sample waits for the next loop turn or call, so time in a short function that does neither is counted mostly where its caller next calls or loops (the JVM's safepoint bias). The safe points now save where they are (<code>SAVE_IP</code> in <code>GC_SAFE_POINT</code> and the loop's), so a sample's line is the one running, not the last call's. Sampling at any instruction, from the interpreter's own <code>ip</code>, would remove the bias; to be weighed against its cost.</p>
+</section>
+
+<section class="item" id="o-cache-snapshot">
+<h3>Native code made in the background from caches that changed under it</h3>
+<p class="status"><span class="label">Recommended</span> Done</p>
+<p>Found 2026-11-20 by toww, the x86 emulator ported to WinterWolf (its bug B84): its <code>SoundTest</code> failed in 13 of 15 runs on Windows, and in none with <code>WW_NATIVE_BACKGROUND=wait</code> or <code>WW_NATIVE=0</code>. An OPL timer's status read A0h where it should read 00h, and in other runs <code>irqFlags | (0x40 &gt;&gt; i)</code> found the field null. Reduced to OplDevice's <code>updateTimers</code>: in <code>t.next += ((now - t.next) / p + 1) * p</code> the first read of <code>t.next</code> (kept on the stack for the add) was <code>getpi</code>, an int in a register alone, which the second read then took over, while the add read the slot from memory (<code>loadi</code>), never written: the timer moved on by 16 ns, not its period, and fired again.</p>
+<p>The cause: the making read the places' caches (<code>FunctionProto::caches</code>) live, and it reads one more than once, in its passes. Made in the background, while the VM ran on and filled them, the analysis saw that read's cache empty (and so a value written to its slot, <code>getpv</code>) and the lowering saw it filled with an int kept as its payload (<code>getpi</code>). Made in place, or while the program waits, nothing fills them meanwhile.</p>
+<p><em>Fixed 2026-11-20 (0.9.5045):</em> the caches are taken with the rest of what the making reads, as the build is asked for (<code>NativeSeen::caches</code>, in <code>takeSeen</code>), and every pass reads that (<code>Region::cacheSeen</code>); the stencils still read the caches themselves as they run. toww's <code>SoundTest</code> passed 15 runs of 15, and the reduced program 200 rounds of 200 (39 of 40 wrong before). No test of ww's own: the window is between two passes of one making, which a small program did not hit with the fault still in.</p>
 </section>
 
 <section class="item" id="o-networking">

@@ -1109,6 +1109,13 @@ struct NativeSeen {
     std::unordered_map<uint32_t, uint64_t> runs;
     uint64_t rounds = 0;
     std::vector<Value> roots;  // marked by the VM as its own while the making may read them
+    // The places' caches (FunctionProto::caches) as they were, which the making reads in place of
+    // the caches themselves (B84, toww's SoundTest, 2026-11-20): the VM fills them as it runs on
+    // while a build is made in the background, and the making reads one more than once, in its
+    // passes. A field read the analysis saw no cache for, as a value written to its slot (getpv),
+    // and the lowering then saw kept as an int, in a register alone (getpi): the add that came
+    // after read the slot, never written, and t.next += ... gave what an older frame left there.
+    std::vector<uint64_t> caches;
 };
 // What the program holds, taken for `f`'s regions: `frame`, the call's `frameSlots` live slots;
 // the VM's globals; `noMember` asks the VM (`vm`) whether a bare name is a member of an object.

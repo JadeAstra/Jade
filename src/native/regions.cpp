@@ -528,6 +528,11 @@ struct Region {
     // making may run on another core as the program goes on, background-plan.html); its objects'
     // kinds (Obj::type, which never changes) are read, the collector keeping them meanwhile.
     const NativeSeen* seen = nullptr;
+    // What place `cache`'s cache held as the build was asked for (NativeSeen::caches): the same
+    // in every pass, as the VM fills the caches meanwhile (B84). 0, as an empty cache, where none.
+    uint64_t cacheSeen(int cache) const {
+        return seen != nullptr && cache >= 0 && static_cast<size_t>(cache) < seen->caches.size() ? seen->caches[static_cast<size_t>(cache)] : 0;
+    }
     // The frame's slot, as it was; null where it is not known.
     const Value* frameAt(int slot) const {
         if (seen == nullptr || slot < 0 || static_cast<size_t>(slot) >= seen->frame.size() || slot >= f.maxStack) return nullptr;
@@ -882,7 +887,7 @@ struct Region {
         if (cls == nullptr || f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) return nullptr;
         const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
         if (layout == nullptr) return nullptr;
-        const uint64_t seen = f.caches[cache].load(std::memory_order_relaxed);
+        const uint64_t seen = cacheSeen(cache);
         if (seen == 0) {
             const ObjString* const name = named != nullptr ? named : slowName(slow);
             if (name == nullptr) return nullptr;
@@ -914,7 +919,7 @@ struct Region {
         if (known == nullptr) return false;
         const Value& v = *known;
         if (!v.isObjType(ObjType::Instance) || f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) return false;
-        const uint64_t cached = f.caches[cache].load(std::memory_order_relaxed);
+        const uint64_t cached = cacheSeen(cache);
         auto found = seen->instances.find(v.as.obj);
         if (found == seen->instances.end()) return false;
         const NativeSeen::Instance& inst = found->second;
@@ -2862,7 +2867,7 @@ struct Region {
                     // payload alone says its kind; one kept as a value may hold anything, and is
                     // read as it is. A guess the step checks; and where the cache saw nothing,
                     // how the value is used next.
-                    const uint64_t seen = f.caches[u16(x, 4)].load(std::memory_order_relaxed);
+                    const uint64_t seen = cacheSeen(u16(x, 4));
                     if ((seen & 0x80) != 0 && (seen & 3) == static_cast<uint64_t>(ValueKind::Float)) cls = CF;
                     else if ((seen & 0x80) != 0 && (seen & 3) == static_cast<uint64_t>(ValueKind::Int)) cls = CI;
                     else if (seen == 0) cls = useClass(c.i, a, u8(x, 2), 0, true);
@@ -8885,6 +8890,11 @@ std::unique_ptr<NativeSeen> takeSeen(const FunctionProto& f, const Value* frame,
     auto made = std::make_unique<NativeSeen>();
     const auto started = std::chrono::steady_clock::now();
     NativeSeen& s = *made;
+    // The places' caches, once, for every pass of the making (B84).
+    if (f.caches != nullptr) {
+        s.caches.resize(f.cacheCount);
+        for (size_t c = 0; c < f.cacheCount; c++) s.caches[c] = f.caches[c].load(std::memory_order_relaxed);
+    }
     // What the function's code reads: fields by name (GetProp, GetOwn: the slow ways of the R
     // instructions too), globals, bare names (GetImplicit, InvokeImplicit).
     std::vector<const ObjString*> names, bare;
