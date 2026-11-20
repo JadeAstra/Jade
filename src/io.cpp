@@ -18,6 +18,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <afunix.h>  // AF_UNIX: Windows 10 1803 on
+#include <mstcpip.h>
+#ifndef SIO_UDP_CONNRESET  // a UDP socket's ICMP "port unreachable" reports, in mstcpip.h of newer SDKs
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 #include <windows.h>
 #else
 #include <arpa/inet.h>
@@ -48,6 +52,7 @@ extern char** environ;
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "builtins.h"
 #include "charset.h"
@@ -69,11 +74,14 @@ struct Outcome {
     int64_t number = 0;
     std::shared_ptr<Stream> made;
     bool timedOut = false;  // a read ran past the socket's readTimeout
+    bool unknownHost = false;  // a name the system could not find: an UnknownHostException
+    std::vector<std::string> texts;  // the addresses a name was found at
+    std::string address;  // where a datagram came from, and its port in `number`
 };
 
 // A read that ran past a socket's readTimeout is a SocketTimeoutException, an IOException as in
 // Java (D120), told by the mark the wait left, not by the message's text (8.8f).
-WwThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
+WwThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : out.unknownHost ? "UnknownHostException" : "IOException", out.error); }
 
 // The buffers a read into the program's bytes goes through (RandomAccessFile.readAt into a
 // buffer), kept for the next read: a file read a megabyte at a time would otherwise take new
@@ -351,7 +359,7 @@ std::string systemMessage(DWORD code) {
 // Something that can be read from, written to, waited for or closed: a file, one end of a
 // pipe, a socket, a listening socket, a process. Programs know each by a number.
 struct Stream {
-    enum class Kind { File, Pipe, Socket, Listener, Process };
+    enum class Kind { File, Pipe, Socket, Listener, Process, Datagram };
     Kind kind;
     HANDLE handle = INVALID_HANDLE_VALUE;
     SOCKET socket = INVALID_SOCKET;
@@ -391,7 +399,9 @@ struct Stream {
 
     ~Stream() { close(); }
 
-    bool isSocket() const { return kind == Kind::Socket || kind == Kind::Listener; }
+    bool isSocket() const { return kind == Kind::Socket || kind == Kind::Listener || kind == Kind::Datagram; }
+    // A socket's address family (AF_INET, AF_INET6), where this program made it; 0 where not known.
+    int family = 0;
 
     // Closes it, first getting any thread that is waiting in it out.
     void close() {
@@ -512,7 +522,7 @@ std::string systemMessage(int code) {
 // Something that can be read from, written to, waited for or closed: a file, one end of a
 // pipe, a socket, a listening socket, a process. Programs know each by a number.
 struct Stream {
-    enum class Kind { File, Pipe, Socket, Listener, Process };
+    enum class Kind { File, Pipe, Socket, Listener, Process, Datagram };
     Kind kind;
     int fd = -1;
     // A Unix domain socket's file (2026-11-19), the one it connected to or listens on; a
@@ -553,7 +563,9 @@ struct Stream {
 
     ~Stream() { close(); }
 
-    bool isSocket() const { return kind == Kind::Socket || kind == Kind::Listener; }
+    bool isSocket() const { return kind == Kind::Socket || kind == Kind::Listener || kind == Kind::Datagram; }
+    // A socket's address family (AF_INET, AF_INET6), where this program made it; 0 where not known.
+    int family = 0;
 
     // Closes it, first getting any thread that is waiting in it out: one in a socket's read
     // returns at the shutdown, one waiting for something to read sees `closed` (waitReadable).
@@ -1081,6 +1093,7 @@ void connectTo(const std::string& host, int64_t port, int64_t timeout, Outcome& 
     addrinfoW* found = nullptr;
     if (GetAddrInfoW(widen(host).c_str(), std::to_wstring(port).c_str(), &hints, &found) != 0 || found == nullptr) {
         out.error = "cannot find host '" + host + "'";
+        out.unknownHost = true;
         return;
     }
     int lastError = 0;
@@ -1121,25 +1134,6 @@ void connectTo(const std::string& host, int64_t port, int64_t timeout, Outcome& 
     if (out.made == nullptr)
         out.error = "cannot connect to " + host + ":" + std::to_string(port) + ": " +
                     (lastError == WSAETIMEDOUT ? "timed out" : systemMessage(static_cast<DWORD>(lastError)));
-}
-
-std::shared_ptr<Stream> listenOn(VM& vm, int64_t port, const std::string& address, int backlog) {
-    sockaddr_in local{};
-    local.sin_family = AF_INET;
-    local.sin_port = htons(static_cast<u_short>(port));
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (!address.empty() && InetPtonW(AF_INET, widen(address == "localhost" ? "127.0.0.1" : address).c_str(), &local.sin_addr) != 1)
-        throw ioError(vm, "'" + address + "' is not an address to listen on");
-
-    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == INVALID_SOCKET || bind(s, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != 0 || ::listen(s, backlog) != 0) {
-        const std::string why = systemMessage(static_cast<DWORD>(WSAGetLastError()));
-        if (s != INVALID_SOCKET) closesocket(s);
-        throw ioError(vm, "cannot listen on port " + std::to_string(port) + ": " + why);
-    }
-    auto listener = std::make_shared<Stream>(Stream::Kind::Listener);
-    listener->socket = s;
-    return listener;
 }
 
 void acceptOn(Stream& s, Outcome& out) {
@@ -1530,6 +1524,7 @@ void connectTo(const std::string& host, int64_t port, int64_t timeout, Outcome& 
     addrinfo* found = nullptr;
     if (::getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &found) != 0 || found == nullptr) {
         out.error = "cannot find host '" + host + "'";
+        out.unknownHost = true;
         return;
     }
     int lastError = 0;
@@ -1570,26 +1565,6 @@ void connectTo(const std::string& host, int64_t port, int64_t timeout, Outcome& 
     ::freeaddrinfo(found);
     if (out.made == nullptr)
         out.error = "cannot connect to " + host + ":" + std::to_string(port) + ": " + (timedOut ? "timed out" : systemMessage(lastError));
-}
-
-std::shared_ptr<Stream> listenOn(VM& vm, int64_t port, const std::string& address, int backlog) {
-    sockaddr_in local{};
-    local.sin_family = AF_INET;
-    local.sin_port = htons(static_cast<uint16_t>(port));
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (!address.empty() && ::inet_pton(AF_INET, (address == "localhost" ? "127.0.0.1" : address).c_str(), &local.sin_addr) != 1)
-        throw ioError(vm, "'" + address + "' is not an address to listen on");
-    const int fd = newSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    const int reuse = 1;  // a port just let go of may be taken again at once, as on Windows
-    if (fd >= 0) ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    if (fd < 0 || ::bind(fd, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != 0 || ::listen(fd, backlog) != 0) {
-        const std::string why = systemMessage(errno);
-        if (fd >= 0) ::close(fd);
-        throw ioError(vm, "cannot listen on port " + std::to_string(port) + ": " + why);
-    }
-    auto listener = std::make_shared<Stream>(Stream::Kind::Listener);
-    listener->fd = fd;
-    return listener;
 }
 
 void acceptOn(Stream& s, Outcome& out) {
@@ -1719,6 +1694,328 @@ std::shared_ptr<Stream> listenUnix(VM& vm, const std::string& path, int backlog)
 }
 
 #endif
+
+// ---- Addresses, names and datagrams (networking plan, part 1), for both kinds of system ----
+
+#ifdef _WIN32
+using RawSocket = SOCKET;
+const RawSocket noSocket = INVALID_SOCKET;
+using AddressSize = int;
+RawSocket& rawOf(Stream& s) { return s.socket; }
+int lastNetError() { return WSAGetLastError(); }
+std::string netMessage(int code) { return systemMessage(static_cast<DWORD>(code)); }
+void closeRaw(RawSocket s) { closesocket(s); }
+RawSocket newRawSocket(int family, int type) { return ::socket(family, type, 0); }
+const int timedOutError = WSAETIMEDOUT;
+#else
+using RawSocket = int;
+const RawSocket noSocket = -1;
+using AddressSize = socklen_t;
+RawSocket& rawOf(Stream& s) { return s.fd; }
+int lastNetError() { return errno; }
+std::string netMessage(int code) { return systemMessage(code); }
+void closeRaw(RawSocket s) { ::close(s); }
+RawSocket newRawSocket(int family, int type) { return newSocket(family, type, 0); }
+const int timedOutError = ETIMEDOUT;
+#endif
+
+// The address written in `text` (IPv4's dotted form or IPv6's, or "localhost") with `port`;
+// false where the text is no address.
+bool socketAddressOf(const std::string& text, int64_t port, sockaddr_storage& out, AddressSize& size) {
+    out = sockaddr_storage{};
+    const std::string literal = text == "localhost" ? "127.0.0.1" : text;
+    auto& v4 = reinterpret_cast<sockaddr_in&>(out);
+    if (inet_pton(AF_INET, literal.c_str(), &v4.sin_addr) == 1) {
+        v4.sin_family = AF_INET;
+        v4.sin_port = htons(static_cast<uint16_t>(port));
+        size = sizeof(sockaddr_in);
+        return true;
+    }
+    auto& v6 = reinterpret_cast<sockaddr_in6&>(out);
+    if (inet_pton(AF_INET6, literal.c_str(), &v6.sin6_addr) == 1) {
+        v6.sin6_family = AF_INET6;
+        v6.sin6_port = htons(static_cast<uint16_t>(port));
+        size = sizeof(sockaddr_in6);
+        return true;
+    }
+    return false;
+}
+
+// An IPv4 address as IPv6 holds it (::ffff:a.b.c.d), for a socket that serves both.
+void mapToIpv6(sockaddr_storage& address, AddressSize& size) {
+    if (address.ss_family != AF_INET) return;
+    const sockaddr_in v4 = reinterpret_cast<const sockaddr_in&>(address);
+    sockaddr_in6 v6{};
+    v6.sin6_family = AF_INET6;
+    v6.sin6_port = v4.sin_port;
+    auto* bytes = reinterpret_cast<uint8_t*>(&v6.sin6_addr);
+    bytes[10] = 0xff;
+    bytes[11] = 0xff;
+    std::memcpy(bytes + 12, &v4.sin_addr, 4);
+    address = sockaddr_storage{};
+    std::memcpy(&address, &v6, sizeof(v6));
+    size = sizeof(sockaddr_in6);
+}
+
+// The text of an address, an IPv4 one that IPv6 holds (::ffff:a.b.c.d) given as IPv4; and its port.
+std::string addressText(const sockaddr_storage& address, int* port = nullptr) {
+    char text[INET6_ADDRSTRLEN] = {};
+    if (address.ss_family == AF_INET6) {
+        const auto& v6 = reinterpret_cast<const sockaddr_in6&>(address);
+        if (port != nullptr) *port = ntohs(v6.sin6_port);
+        const auto* bytes = reinterpret_cast<const uint8_t*>(&v6.sin6_addr);
+        static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+        if (std::memcmp(bytes, mapped, 12) == 0) inet_ntop(AF_INET, const_cast<uint8_t*>(bytes + 12), text, sizeof(text));
+        else inet_ntop(AF_INET6, const_cast<in6_addr*>(&v6.sin6_addr), text, sizeof(text));
+    } else if (address.ss_family == AF_INET) {
+        const auto& v4 = reinterpret_cast<const sockaddr_in&>(address);
+        if (port != nullptr) *port = ntohs(v4.sin_port);
+        inet_ntop(AF_INET, const_cast<in_addr*>(&v4.sin_addr), text, sizeof(text));
+    }
+    return text;
+}
+
+// A socket of `type` bound to `address` and `port`. With no address, IPv6's "any" taking IPv4
+// as well, one socket for both (IPV6_V6ONLY off), or IPv4's alone where the system has no IPv6;
+// a given address is that address's family alone. noSocket, with `error` filled in, where it
+// cannot be made.
+RawSocket boundSocket(const std::string& address, int64_t port, int type, std::string& error) {
+    sockaddr_storage local{};
+    AddressSize size = 0;
+    const bool both = address.empty();
+    if (both) {
+        auto& v6 = reinterpret_cast<sockaddr_in6&>(local);
+        v6.sin6_family = AF_INET6;
+        v6.sin6_port = htons(static_cast<uint16_t>(port));
+        v6.sin6_addr = in6addr_any;
+        size = sizeof(sockaddr_in6);
+    } else if (!socketAddressOf(address, port, local, size)) {
+        error = "'" + address + "' is not an address";
+        return noSocket;
+    }
+    RawSocket s = newRawSocket(local.ss_family, type);
+    if (s == noSocket && both) {  // no IPv6 on this machine
+        local = sockaddr_storage{};
+        auto& v4 = reinterpret_cast<sockaddr_in&>(local);
+        v4.sin_family = AF_INET;
+        v4.sin_port = htons(static_cast<uint16_t>(port));
+        v4.sin_addr.s_addr = htonl(INADDR_ANY);
+        size = sizeof(sockaddr_in);
+        s = newRawSocket(AF_INET, type);
+    }
+    if (s == noSocket) {
+        error = netMessage(lastNetError());
+        return noSocket;
+    }
+    if (local.ss_family == AF_INET6) {
+        const int only = both ? 0 : 1;
+        setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&only), sizeof(only));
+    }
+#ifndef _WIN32
+    if (type == SOCK_STREAM) {
+        const int reuse = 1;  // a port just let go of may be taken again at once, as on Windows
+        ::setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    }
+#endif
+    if (bind(s, reinterpret_cast<sockaddr*>(&local), size) != 0) {
+        error = netMessage(lastNetError());
+        closeRaw(s);
+        return noSocket;
+    }
+    return s;
+}
+
+// A socket that takes TCP connections at `address` (none for every address, IPv4 and IPv6) and
+// `port` (0 for one the system picks).
+std::shared_ptr<Stream> listenOn(VM& vm, int64_t port, const std::string& address, int backlog) {
+    std::string error;
+    const RawSocket s = boundSocket(address, port, SOCK_STREAM, error);
+    if (s == noSocket) {
+        if (error.find("is not an address") != std::string::npos) throw ioError(vm, "'" + address + "' is not an address to listen on");
+        throw ioError(vm, "cannot listen on port " + std::to_string(port) + ": " + error);
+    }
+    if (::listen(s, backlog) != 0) {
+        const std::string why = netMessage(lastNetError());
+        closeRaw(s);
+        throw ioError(vm, "cannot listen on port " + std::to_string(port) + ": " + why);
+    }
+    auto listener = std::make_shared<Stream>(Stream::Kind::Listener);
+    rawOf(*listener) = s;
+    return listener;
+}
+
+// The address this end of a socket is at, as text; empty where it cannot say.
+std::string localAddressText(Stream& s) {
+    if (!s.unixPath.empty()) return std::string();
+    sockaddr_storage address{};
+    AddressSize size = sizeof(address);
+    if (getsockname(rawOf(s), reinterpret_cast<sockaddr*>(&address), &size) != 0) return std::string();
+    return addressText(address);
+}
+
+// The addresses `host` is found at by the system's resolver, each once, in the order it gives.
+void lookUp(const std::string& host, Outcome& out) {
+#ifdef _WIN32
+    addrinfoW hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfoW* found = nullptr;
+    const int failed = GetAddrInfoW(widen(host).c_str(), nullptr, &hints, &found);
+#else
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* found = nullptr;
+    const int failed = ::getaddrinfo(host.c_str(), nullptr, &hints, &found);
+#endif
+    if (failed != 0 || found == nullptr) {
+        out.unknownHost = true;
+#ifdef _WIN32
+        const bool missing = failed == WSAHOST_NOT_FOUND || failed == WSANO_DATA || found == nullptr;
+        out.error = "cannot find host '" + host + "'" + (missing ? std::string() : ": " + netMessage(failed));
+#else
+        const bool missing = failed == EAI_NONAME || found == nullptr
+#ifdef EAI_NODATA
+                             || failed == EAI_NODATA
+#endif
+            ;
+        out.error = "cannot find host '" + host + "'" + (missing ? std::string() : std::string(": ") + ::gai_strerror(failed));
+#endif
+        if (found != nullptr) {
+#ifdef _WIN32
+            FreeAddrInfoW(found);
+#else
+            ::freeaddrinfo(found);
+#endif
+        }
+        return;
+    }
+    for (auto* entry = found; entry != nullptr; entry = entry->ai_next) {
+        if (entry->ai_family != AF_INET && entry->ai_family != AF_INET6) continue;
+        sockaddr_storage address{};
+        std::memcpy(&address, entry->ai_addr, std::min<size_t>(entry->ai_addrlen, sizeof(address)));
+        const std::string text = addressText(address);
+        if (std::find(out.texts.begin(), out.texts.end(), text) == out.texts.end()) out.texts.push_back(text);
+    }
+#ifdef _WIN32
+    FreeAddrInfoW(found);
+#else
+    ::freeaddrinfo(found);
+#endif
+}
+
+// The name the system's resolver gives the address in `text`; empty where it has none.
+std::string nameOf(const std::string& text) {
+    sockaddr_storage address{};
+    AddressSize size = 0;
+    if (!socketAddressOf(text, 0, address, size)) return std::string();
+#ifdef _WIN32
+    wchar_t name[NI_MAXHOST] = {};
+    if (GetNameInfoW(reinterpret_cast<const sockaddr*>(&address), size, name, NI_MAXHOST, nullptr, 0, NI_NAMEREQD) != 0) return std::string();
+    return narrow(name, static_cast<int>(wcslen(name)));
+#else
+    char name[NI_MAXHOST] = {};
+    if (::getnameinfo(reinterpret_cast<const sockaddr*>(&address), size, name, NI_MAXHOST, nullptr, 0, NI_NAMEREQD) != 0) return std::string();
+    return name;
+#endif
+}
+
+// A UDP socket at `address` and `port`, as boundSocket makes it.
+std::shared_ptr<Stream> openDatagram(VM& vm, int64_t port, const std::string& address) {
+    std::string error;
+    const RawSocket s = boundSocket(address, port, SOCK_DGRAM, error);
+    if (s == noSocket) {
+        if (error.find("is not an address") != std::string::npos) throw ioError(vm, "'" + address + "' is not an address for a datagram socket");
+        throw ioError(vm, "cannot open a datagram socket at port " + std::to_string(port) + ": " + error);
+    }
+#ifdef _WIN32
+    // Windows would fail the next receive where a datagram sent earlier found no one listening
+    // (an ICMP "port unreachable"); Linux leaves that unsaid, and so does this.
+    BOOL report = FALSE;
+    DWORD returned = 0;
+    WSAIoctl(s, SIO_UDP_CONNRESET, &report, sizeof(report), nullptr, 0, &returned, nullptr, nullptr);
+#endif
+    auto made = std::make_shared<Stream>(Stream::Kind::Datagram);
+    rawOf(*made) = s;
+    sockaddr_storage local{};
+    AddressSize size = sizeof(local);
+    if (getsockname(s, reinterpret_cast<sockaddr*>(&local), &size) == 0) made->family = local.ss_family;
+    return made;
+}
+
+// Sends `size` bytes from `data` as one datagram to `address` and `port`; false, with `error`
+// filled in, where it cannot.
+bool sendDatagram(Stream& s, const uint8_t* data, size_t size, const std::string& address, int64_t port, std::string& error) {
+    Use use(s);
+    if (s.closed.load()) {
+        error = "the socket is closed";
+        return false;
+    }
+    sockaddr_storage to{};
+    AddressSize toSize = 0;
+    if (!socketAddressOf(address, port, to, toSize)) {
+        error = "'" + address + "' is not an address";
+        return false;
+    }
+    if (s.family == AF_INET6) mapToIpv6(to, toSize);
+    else if (s.family == AF_INET && to.ss_family == AF_INET6) {
+        error = "a datagram socket at an IPv4 address cannot send to an IPv6 one (" + address + ")";
+        return false;
+    }
+    const auto sent = sendto(rawOf(s), reinterpret_cast<const char*>(data), static_cast<int>(size), 0, reinterpret_cast<const sockaddr*>(&to), toSize);
+    if (sent < 0) {
+        const int code = lastNetError();
+        error = s.closed.load() ? "the socket is closed" : "cannot send to " + address + ": " + netMessage(code);
+        return false;
+    }
+    return true;
+}
+
+// Waits for one datagram, and gives up to `max` of its bytes (what does not fit is lost, as
+// Java's receive loses it), where it came from, and its port.
+void receiveDatagram(Stream& s, size_t max, Outcome& out) {
+    Use use(s);
+    if (s.closed.load()) {
+        out.error = "the socket is closed";
+        return;
+    }
+#ifndef _WIN32
+    if (!waitReadable(s, s.readTimeout > 0 ? s.readTimeout : -1, out)) return;
+#endif
+    out.data.resize(std::max<size_t>(max, 1));
+    sockaddr_storage from{};
+    AddressSize fromSize = sizeof(from);
+    for (;;) {
+        auto got = recvfrom(rawOf(s), out.data.data(), static_cast<int>(out.data.size()), 0, reinterpret_cast<sockaddr*>(&from), &fromSize);
+        if (got < 0) {
+            const int code = lastNetError();
+#ifdef _WIN32
+            if (code == WSAEMSGSIZE) got = static_cast<int>(out.data.size());  // cut to fit
+#else
+            if (code == EINTR) continue;
+#endif
+        }
+        if (got < 0) {
+            const int code = lastNetError();
+            if (s.closed.load()) out.error = "the socket is closed";
+            else if (code == timedOutError
+#ifndef _WIN32
+                     || code == EAGAIN || code == EWOULDBLOCK
+#endif
+            ) {
+                out.error = "the read timed out";
+                out.timedOut = true;
+            } else out.error = "cannot receive a datagram: " + netMessage(code);
+            out.data.clear();
+            return;
+        }
+        out.data.resize(static_cast<size_t>(got) > max ? max : static_cast<size_t>(got));
+        int port = 0;
+        out.address = addressText(from, &port);
+        out.number = port;
+        return;
+    }
+}
 
 std::vector<std::string> selfCommand;
 
@@ -2374,13 +2671,106 @@ void registerIo(VM& vm) {
         list->values().push_back(localPort(*s, port) ? Value::integer(port) : Value::null());
         std::string host;
         if (s->kind == Stream::Kind::Socket && remoteEnd(*s, host, port)) {
+            // An IPv4 address that a socket of both kinds took in (::ffff:1.2.3.4) is given as IPv4.
+            if (host.rfind("::ffff:", 0) == 0 && host.find('.') != std::string::npos) host = host.substr(7);
             list->values().push_back(vm.str(host));
             list->values().push_back(Value::integer(port));
         } else {
             list->values().push_back(Value::null());
             list->values().push_back(Value::null());
         }
+        const std::string local = localAddressText(*s);
+        list->values().push_back(local.empty() ? Value::null() : vm.str(local));
         return Value::object(list);
+    });
+
+    // ---- Names, and datagrams (networking plan, part 1) ----
+
+    // lookup(host): the addresses the system's resolver finds `host` at, as text, each once; an
+    // UnknownHostException where it finds none.
+    def("lookup", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        refuseInSandbox(vm, "looking up a name");
+        startNetworking(vm);
+        const std::string host = vm.toStr(args[0], "host");
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { lookUp(host, *out); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               ObjList* list = newList(vm);
+                               TempRoot keepList(vm, Value::object(list));
+                               for (const std::string& text : out->texts) list->values().push_back(vm.str(text));
+                               return Value::object(list);
+                           });
+    });
+
+    // reverseLookup(address): the name of the address in the text, or null where it has none.
+    def("reverseLookup", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        refuseInSandbox(vm, "looking up a name");
+        startNetworking(vm);
+        const std::string address = vm.toStr(args[0], "address");
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { out->data = nameOf(address); },
+                           [out](VM& vm) -> Value { return out->data.empty() ? Value::null() : vm.str(out->data); });
+    });
+
+    // This machine's name; "localhost" where the system will not say, which a working one does.
+    def("hostName", 0, 0, [](VM& vm, int, Value*) -> Value {
+        startNetworking(vm);
+        char name[256] = {};
+        if (gethostname(name, static_cast<int>(sizeof(name) - 1)) != 0 || name[0] == 0) return vm.str("localhost");
+        return vm.str(name);
+    });
+
+    // openDatagram(port, address): a UDP socket. Port 0 lets the system choose one; with no
+    // address it takes datagrams at every address this machine has, IPv4 and IPv6.
+    def("openDatagram", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
+        refuseInSandbox(vm, "a datagram socket");
+        startNetworking(vm);
+        const int64_t port = vm.toInt(args[0], "port");
+        if (port < 0 || port > 65535) throw vm.runtimeError(Thrown::IllegalArgumentException, "a port is from 0 to 65535, not " + std::to_string(port));
+        const std::string address = argc > 1 && !args[1].isNull() ? vm.toStr(args[1], "address") : std::string();
+        return Value::integer(keep(openDatagram(vm, port, address)));
+    });
+
+    // sendDatagram(handle, bytes, offset, count, address, port): `count` of the bytes from
+    // `offset`, sent as one datagram.
+    def("sendDatagram", 6, 6, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        if (s->kind != Stream::Kind::Datagram) throw vm.runtimeError(Thrown::IllegalArgumentException, "not a datagram socket");
+        if (!args[1].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::ClassCastException, "a datagram is Bytes, not " + vm.typeName(args[1]));
+        const ObjBytes* bytes = asBytes(args[1]);
+        const int64_t offset = vm.toInt(args[2], "offset");
+        const int64_t count = vm.toInt(args[3], "count");
+        const int64_t size = static_cast<int64_t>(bytes->data.size());
+        if (offset < 0 || count < 0 || offset > size || count > size - offset)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, std::to_string(count) + " bytes from " + std::to_string(offset) + " do not fit in bytes of size " + std::to_string(size));
+        const std::string address = vm.toStr(args[4], "address");
+        const int64_t port = vm.toInt(args[5], "port");
+        if (port < 0 || port > 65535) throw vm.runtimeError(Thrown::IllegalArgumentException, "a port is from 0 to 65535, not " + std::to_string(port));
+        // Sending does not wait (the system queues the datagram or drops it), so it runs here.
+        std::string error;
+        if (!sendDatagram(*s, bytes->data.data() + offset, static_cast<size_t>(count), address, port, error)) throw ioError(vm, error);
+        return Value::null();
+    });
+
+    // receiveDatagram(handle, max): waits for a datagram; [its bytes (up to `max`), the address
+    // it came from, its port]. A SocketTimeoutException past the socket's readTimeout.
+    def("receiveDatagram", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        auto s = findStream(args[0]);
+        if (s == nullptr) throw ioError(vm, "the socket is closed");
+        if (s->kind != Stream::Kind::Datagram) throw vm.runtimeError(Thrown::IllegalArgumentException, "not a datagram socket");
+        const int64_t max = vm.toInt(args[1], "size");
+        if (max < 0 || max > 65535) throw vm.runtimeError(Thrown::IllegalArgumentException, "a datagram holds from 0 to 65535 bytes, not " + std::to_string(max));
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { receiveDatagram(*s, static_cast<size_t>(max), *out); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               const Value data = bytesValue(vm, out->data);
+                               TempRoot keepData(vm, data);
+                               const Value from = vm.str(out->address);
+                               TempRoot keepFrom(vm, from);
+                               return Value::object(newList(vm, {data, from, Value::integer(out->number)}));
+                           });
     });
 
     // How long a read on a socket waits before giving up, in ms; 0 for as long as it takes.

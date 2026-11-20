@@ -274,7 +274,7 @@ enum class Thrown : uint8_t {
     RuntimeException, ArithmeticException, IndexOutOfBoundsException, NullPointerException, ClassCastException,
     IllegalArgumentException, NumberFormatException, IllegalStateException, UnsupportedOperationException,
     NoSuchElementException, ConcurrentModificationException, AssertionError, StackOverflowError, OutOfMemoryError,
-    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, SecurityException, ScriptLimitException, Count_
+    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, SecurityException, ScriptLimitException, UnknownHostException, Count_
 };
 
 // The instructions as functions (M6.7): built with Clang, each instruction of instructions.inc is
@@ -1924,6 +1924,7 @@ void registerXml(VM& vm);      // xml_scan.cpp: what Xml.scan is built on (M9/M1
 void registerRegex(VM& vm);    // regex_api.cpp: what Regex is built on (N5, M8)
 void registerForeign(VM& vm);  // foreign.cpp: Library, Memory and Foreign (M8)
 void registerWorkers(VM& vm);  // worker.cpp: isolated workers
+void registerSecureRandom(VM& vm);  // crypto/random.cpp: the system's secure random numbers
 // For scripts (script.cpp): a value written out as a worker's message is, to be read by another
 // VM; and such a message read back. Frozen data in it is shared, as in a worker's (D97).
 struct Message;

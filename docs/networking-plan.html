@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Networking plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: networking and cryptography</h1>
+<p class="lede">Written 2026-11-20 at the user's word ("yes, go ahead with networking as recommended"). The layout was decided on 2026-11-19: the standard library takes UDP, addresses, DNS and secure random numbers beside TCP; <code>import Crypto</code> takes the cryptography, certificates and TLS; <code>import Web</code> takes HTTP. This plan carries M12 of <a href="gui-plan.html">gui-plan.html</a> (2026-10-16, changed 2026-10-17): WinterWolf's own TLS 1.2 and 1.3, the protocol in WinterWolf and the primitives in C++, one implementation on Windows and Linux, modern suites only, checked against published test data and against real peers. The questions below were answered on the same go-ahead, each as recommended; any can still be changed before its part is built.</p>
+
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#np-need">What the apps need</a></li>
+<li><a href="#np-layout">Where each part lives</a></li>
+<li><a href="#np-std">Part 1 in detail: the standard library</a></li>
+<li><a href="#np-parts">The parts, each with its gate</a></li>
+<li><a href="#np-questions">Questions</a></li>
+</ul>
+</nav>
+
+<h2 id="np-need">What the apps need</h2>
+<p>Counted 2026-11-20 in <code>C:\Users\sciss\IdeaProjects</code> (JadeMail, JadesDomain, JadeNet, JadeLib), by the Java and Kotlin names they use:</p>
+<div class="table"><table>
+<tr><th>What</th><th class="num">JadeMail</th><th class="num">JadesDomain</th><th class="num">JadeNet</th><th>Used for</th></tr>
+<tr><td>Addresses (<code>InetAddress</code>, <code>InetSocketAddress</code>)</td><td class="num">30</td><td class="num">74</td><td class="num">6</td><td>listening addresses, the far side of a query, <code>getByName</code>, <code>getLoopbackAddress</code>, <code>isLoopbackAddress</code> and the other tests</td></tr>
+<tr><td>UDP (<code>DatagramSocket</code>, <code>DatagramPacket</code>)</td><td class="num">5</td><td class="num">22</td><td class="num"></td><td>the DNS server, JadeMail's DNS client</td></tr>
+<tr><td>Secure random numbers</td><td class="num">12</td><td class="num">6</td><td class="num">2</td><td>tokens, keys, DNS query ids</td></tr>
+<tr><td>TLS (<code>SSLContext</code>, <code>SSLSocket</code>, <code>SSLServerSocket</code>, <code>KeyStore</code>)</td><td class="num">38</td><td class="num">25</td><td class="num"></td><td>SMTP and IMAP with STARTTLS, DNS over TLS and HTTPS, PKCS#12 identities</td></tr>
+<tr><td>Hashes, HMAC, KDF</td><td class="num">9</td><td class="num">3</td><td class="num">7</td><td>SHA-256, SHA-512, HMAC-SHA256, PBKDF2-HMAC-SHA256</td></tr>
+<tr><td>Public key</td><td class="num">27</td><td class="num">5</td><td class="num">6</td><td>RSA key pairs and signatures (DKIM: 14 uses of "RSA"), EC and SHA256withECDSA, Ed25519, X25519 key agreement (JadeNet)</td></tr>
+<tr><td>Ciphers</td><td class="num"></td><td class="num"></td><td class="num">4</td><td>AES-GCM in JadeNet's own channel</td></tr>
+<tr><td>HTTP (<code>HttpClient</code>, <code>HttpServer</code>)</td><td class="num">7</td><td class="num">8</td><td class="num"></td><td>MTA-STS, DNS over HTTPS, admin pages</td></tr>
+</table></div>
+<p>WinterWolf has today: <code>Socket</code> and <code>ServerSocket</code> over TCP (IPv4 listening only) and Unix domain sockets, with <code>readTimeout</code> and <code>SocketTimeoutException</code> (D120), and a sandbox's simulated network (M6.6.2). Nothing else on this list.</p>
+
+<h2 id="np-layout">Where each part lives</h2>
+<div class="table"><table>
+<tr><th>Where</th><th>What</th></tr>
+<tr><td><strong>Standard library</strong>, no import</td><td>TCP as now, listening on IPv6 too; <code>IpAddress</code>, <code>SocketAddress</code>, <code>Dns</code>; UDP's <code>DatagramSocket</code> and <code>Datagram</code>; <code>SecureRandom</code>.</td></tr>
+<tr><td><strong><code>import Crypto</code></strong></td><td>SHA-2, SHA-3, HMAC, HKDF, PBKDF2, Argon2id; AES-GCM, ChaCha20-Poly1305; X25519, Ed25519, P-256 (ECDH, ECDSA), RSA (signatures and key pairs); DER, PEM, X.509, PKCS#8, PKCS#12, the system's trusted certificates; TLS client and server, with STARTTLS.</td></tr>
+<tr><td><strong><code>import Web</code></strong></td><td>URLs, HTTP/1.1 client and server, headers, cookies, forms, bodies (with <code>Json</code>), HTTPS through Crypto, WebSockets.</td></tr>
+</table></div>
+<p>Crypto and Web are libraries in <code>lib/</code>, packed into ww.exe as Jade and Snippy are, written in WinterWolf. The primitives (the arithmetic of the ciphers, hashes and curves) are C++ in <code>src/crypto/</code>, with a public WinterWolf API as every C++ piece has: constant time where a secret is involved, the processor's AES, carry-less multiply and SHA instructions where it has them (x86-64 and ARM64, which is a target), portable constant-time code where it does not. No third-party code; the test data (RFC vectors, NIST's, Wycheproof's) is data, kept under <code>tests/data</code>.</p>
+
+<h2 id="np-std">Part 1 in detail: the standard library</h2>
+<pre><code>val home = IpAddress("192.168.1.10")          // or "::1"; an IllegalArgumentException if it is no address
+IpAddress.parse(text)                          // null where it is not one
+IpAddress.loopback, IpAddress.loopback6, IpAddress.any, IpAddress.any6
+home.isIpv4  home.isIpv6  home.bytes  home.isLoopback  home.isAny  home.isLinkLocal  home.isPrivate  home.isMulticast
+"$home"                                        // "192.168.1.10"; IPv6 in its shortest form (RFC 5952)
+
+val server = SocketAddress(IpAddress.loopback, 53)     // or SocketAddress("127.0.0.1", 53)
+SocketAddress.parse("[::1]:53")                // "1.2.3.4:53" too
+server.address  server.port  "$server"
+
+Dns.lookup("example.org")                      // List&lt;IpAddress&gt;, the system's resolver (getaddrinfo)
+Dns.lookupFirst("example.org")                 // the one the system prefers
+Dns.reverse(address)                           // a name, or null
+Dns.localHostName                              // this machine's name
+// An UnknownHostException, an IOException, where the name is not found.
+
+DatagramSocket(port = 5353).use { udp -&gt;           // no address: IPv4 and IPv6 both
+  udp.readTimeout = 2.seconds
+  val query = udp.receive()                     // a Datagram: data, from
+  udp.send(answer(query.data), query.from)
+}
+
+SecureRandom.bytes(16)  SecureRandom.fill(buffer)  SecureRandom.randomInt(1, 6)  SecureRandom.random()
+
+Socket(SocketAddress(IpAddress.loopback6, 8080))
+ServerSocket(8080)                             // now IPv4 and IPv6 both; bindAddress may be an IpAddress</code></pre>
+<ul>
+<li>Addresses are only numbers: making one never asks DNS (Java's <code>InetAddress.getByName</code> does, which hides a wait). Names are looked up with <code>Dns</code>.</li>
+<li>An address arriving as IPv4 mapped into IPv6 (<code>::ffff:1.2.3.4</code>, from a socket listening on both) is given as the IPv4 address.</li>
+<li>Waiting calls (a lookup, a receive) go through <code>VM::blocking</code>, as TCP's do: a thread waits with the lock let go, a task is set aside.</li>
+<li>In a sandbox, UDP and DNS are refused with an IOException, as Unix domain sockets are: its network is the simulated one of M6.6.2, which has TCP only.</li>
+<li>Secure random numbers come from the system: <code>BCryptGenRandom</code> on Windows, <code>getrandom</code> on Linux. <code>randomInt</code> has no bias (it rejects and draws again).</li>
+<li>Windows reports an ICMP "port unreachable" as a failed later receive on a UDP socket; that is switched off (<code>SIO_UDP_CONNRESET</code>), as Linux does by default.</li>
+</ul>
+
+<h2 id="np-parts">The parts, each with its gate</h2>
+<div class="table"><table>
+<tr><th>Part</th><th>What</th><th>Gate</th></tr>
+<tr><td class="part">1. Standard library</td><td>Addresses, DNS, UDP, secure random numbers; TCP listening on IPv6 and connecting to a <code>SocketAddress</code>.</td><td>Tests on Windows and Linux: UDP and TCP over IPv4 and IPv6 on this machine, lookups of <code>localhost</code> and of literals, every address test against a table, timeouts, closing while another thread waits; random bytes pass a frequency test and <code>randomInt</code> stays in range at its edges. The full suite.</td></tr>
+<tr><td class="part">2. Crypto: hashes and ciphers</td><td>SHA-256/384/512, SHA3-256/512, SHAKE; HMAC; HKDF; PBKDF2; Argon2id; AES-128/256-GCM; ChaCha20-Poly1305. C++ in <code>src/crypto/</code>, the API in <code>lib/Crypto</code>, working on parts of <code>Bytes</code> in place.</td><td>Every vector of the RFCs, NIST's CAVP files and Wycheproof's for these passes, on both systems, with and without the processor's instructions. No branch or table index depends on a secret (read for, and a timing test). Speed against OpenSSL in WSL written down.</td></tr>
+<tr><td class="part">3. Crypto: public key</td><td>X25519, Ed25519, P-256 ECDH and ECDSA, RSA (PKCS#1 v1.5 and PSS signatures, key pairs of 2048 to 4096 bits).</td><td>RFC and Wycheproof vectors, the edge cases included; signatures made here verify with OpenSSL and the other way round.</td></tr>
+<tr><td class="part">4. Certificates</td><td>DER and PEM; X.509 read and chains checked (validity, key usage, basic constraints, name constraints, host names per RFC 6125); PKCS#8 keys; PKCS#12 read and written; the system's trusted roots (Windows' store, Linux's <code>/etc/ssl/certs</code>).</td><td>Real chains (several public sites', a private CA's), malformed and wrongly chained certificates refused with a reason; PKCS#12 files made by OpenSSL and by Java's keytool read, and ours read by them.</td></tr>
+<tr><td class="part">5. TLS</td><td>TLS 1.3, then 1.2 (ECDHE with AEAD only), client and server: SNI, ALPN, session tickets (no 0-RTT), STARTTLS on an open <code>Socket</code>, alerts. The protocol in WinterWolf, records sealed and opened in place by the C++.</td><td>Talks to OpenSSL's <code>s_client</code> and <code>s_server</code> and to curl in WSL and the Fedora VM, both versions, every suite; fetches from real HTTPS sites; refuses the bad cases (wrong host, expired, untrusted, downgrade); a fuzz run over its record and handshake reading.</td></tr>
+<tr><td class="part">6. Web</td><td>URLs; HTTP/1.1 client and server with keep-alive, chunked bodies and gzip; headers, cookies, forms, JSON bodies; HTTPS; WebSockets.</td><td>The client against real sites and a local server; the server against curl and a browser; WebSockets against a browser.</td></tr>
+</table></div>
+<p>Each part is finished, tested, committed and reported before the next starts, on the user's word. Each build commit counts the version up as before (0.9.5043 for part 1).</p>
+
+<h2 id="np-questions">Questions</h2>
+<p>Each came with a recommendation; all were taken as recommended on the go-ahead of 2026-11-20.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>The address types' names</h3>
+<ul>
+<li><strong><code>IpAddress</code> and <code>SocketAddress</code></strong>, numbers only, with Java's <code>InetAddress</code> and <code>InetSocketAddress</code> as errors naming them: clear names, and no hidden DNS wait.</li>
+<li><strong>Java's names,</strong> with Java's behaviour (a name looked up on making one): ported code as written, the hidden wait kept.</li>
+</ul>
+<p><em>Recommended:</em> <code>IpAddress</code> and <code>SocketAddress</code>.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span><code>Socket.remoteAddress</code>: text or an <code>IpAddress</code>?</h3>
+<p>It is text today (<code>"127.0.0.1"</code>), and in a sandbox it is the host name the program connected to (<code>"example.test"</code>), which is no address. <em>Recommended:</em> keep it as text; a <code>Datagram</code>'s <code>from</code> is a <code>SocketAddress</code>, since UDP has no sandbox form.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>Listening with no address given</h3>
+<p>Today a <code>ServerSocket</code> with no address takes IPv4 connections only. <em>Recommended:</em> both IPv4 and IPv6 (one socket, <code>IPV6_V6ONLY</code> off), as Java and Go do; IPv4 alone where the machine has no IPv6. The same for a <code>DatagramSocket</code>.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>UDP's shape</h3>
+<p>Java fills a <code>DatagramPacket</code> in place. <em>Recommended:</em> <code>udp.send(data, to)</code> and <code>udp.receive()</code> giving a <code>Datagram(data, from)</code>, with no packet object. A receive makes new bytes of the size that came, which a DNS server's few thousand queries a second do not notice.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>DNS: the system's resolver, or a DNS client of our own?</h3>
+<p><em>Recommended:</em> the system's resolver in the standard library (addresses of a name, the name of an address). Records such as MX and TXT need a DNS client that speaks the protocol; JadeMail and JadesDomain have their own, which port as they are.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">6</span><code>SecureRandom</code>'s shape</h3>
+<p><em>Recommended:</em> an object with <code>Math</code>'s names (<code>random()</code>, <code>randomInt(low, high)</code>) plus <code>bytes(n)</code> and <code>fill(bytes)</code>; no instances, since there is nothing to keep.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">7</span>Password hashing</h3>
+<p><em>Recommended:</em> Argon2id (RFC 9106), the current first choice for new passwords, and PBKDF2-HMAC-SHA256, which JadeLib's stored hashes use. No scrypt or bcrypt.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">8</span>How much RSA</h3>
+<p>The layout said "RSA for verifying". JadeMail's DKIM makes RSA key pairs and signs with them. <em>Recommended:</em> RSA key pairs, and PKCS#1 v1.5 and PSS signatures both ways, in constant time; no RSA encryption (OAEP) and no RSA key exchange.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">9</span>TLS features</h3>
+<p><em>Recommended:</em> TLS 1.3 first, then 1.2 with ECDHE and AEAD only; SNI, ALPN, session tickets, STARTTLS; client certificates on request. No 0-RTT data (it can be replayed), no renegotiation, no compression. Revocation is not checked, as Go and the browsers' own TLS libraries leave it.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">10</span>HTTP versions</h3>
+<p><em>Recommended:</em> HTTP/1.1, client and server, and WebSockets; HTTP/2 left until something needs it (every server and client still speaks 1.1).</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-20, as recommended.</span></div>
+</section>
+</main>
+</body>
+</html>

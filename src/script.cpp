@@ -969,6 +969,10 @@ void sharedMain(std::shared_ptr<ScriptHost> host, std::shared_ptr<Host> files, V
             session = new CompilerSession(*vm);  // within the try: making it may throw (a compile of the library)
             session->libraryPaths = commandLibraryPaths();
             vm->load(session->program);
+            // The standard library's top level, now: run by the first script's start it was counted
+            // in that script's limits (a time limit of 50 ms passed under GC stress), which a
+            // script with a VM of its own is not (ownMain).
+            vm->runModule(0);
             vm->jobStarted();  // it waits for scripts and calls until it is stopped
             waiting = true;
             {

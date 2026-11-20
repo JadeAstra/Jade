@@ -1,0 +1,8 @@
+// What a program ported from Java's networking is told: each old name, and what to write in
+// WinterWolf (networking plan, questions 1 and 4).
+
+fun at(host : InetAddress) {}                 // check: an internet address is an IpAddress in WinterWolf, the number alone: IpAddress("1.2.3.4"), IpAddress.loopback; a name is looked up with Dns.lookup(host) or Dns.lookupFirst(host) (networking plan, question 1)
+fun four(a : Inet4Address) {}                 // check: an internet address is an IpAddress in WinterWolf, IPv4 or IPv6: IpAddress("1.2.3.4"), address.isIpv4 (networking plan, question 1)
+fun six(a : Inet6Address) {}                  // check: an internet address is an IpAddress in WinterWolf, IPv4 or IPv6: IpAddress("::1"), address.isIpv6 (networking plan, question 1)
+val where = InetSocketAddress("1.2.3.4", 53)  // check: an address and a port are a SocketAddress in WinterWolf: SocketAddress(IpAddress.loopback, 53), SocketAddress("1.2.3.4", 53); a name is looked up first with Dns.lookupFirst(host) (networking plan, question 1)
+val packet = DatagramPacket(Bytes(4), 4)      // check: a datagram is sent with udp.send(bytes, to) in WinterWolf, and udp.receive() gives a Datagram, its data and where it came from (networking plan, question 4)

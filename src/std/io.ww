@@ -305,11 +305,14 @@ class Socket : AutoCloseable {
   private var output : Writer? = null
   private var readLimit : Duration? = null
 
-  // Socket(host, port), or Socket(path) for a Unix domain socket, connects at once; Socket()
-  // waits for connect().
-  fun init(host : (string | FilePath)? = null, port : int = 0) throws IOException {
+  // Socket(host, port), Socket(address) for a SocketAddress, or Socket(path) for a Unix domain
+  // socket, connects at once; Socket() waits for connect(). A host name not found is an
+  // UnknownHostException, an IOException.
+  fun init(host : (string | FilePath | SocketAddress)? = null, port : int = 0) throws IOException {
     if (host is FilePath) {
       connect(host as FilePath)
+    } else if (host is SocketAddress) {
+      connect(host as SocketAddress)
     } else if (host != null) {
       connect(host as string, port)
     }
@@ -323,6 +326,10 @@ class Socket : AutoCloseable {
     adopt(box == null ? __io.connect(host, port, timeout?.waitMilliseconds) : box.network.connectTo(host, port))
     return this
   }
+
+  // To an address and port (networking plan, part 1); with a time limit, gives up when it runs
+  // out.
+  fun connect(to : SocketAddress, timeout : Duration? = null) : Socket throws IOException => connect("${to.address}", to.port, timeout)
 
   // To the Unix domain socket whose file is `path` (2026-11-19); with a time limit, gives up
   // when it runs out. Not in a sandbox, which reaches no socket but its own (an IOException).
@@ -414,14 +421,15 @@ class Socket : AutoCloseable {
 //   val local = ServerSocket(FilePath("/run/app.sock"))   // for programs on this machine alone
 //
 // Port 0 lets the system pick a free one (see localPort). With no address it takes
-// connections from anywhere; "127.0.0.1" keeps it to programs on this machine. A Unix domain
+// connections from anywhere, over IPv4 and IPv6 both (IPv4 alone where the machine has no IPv6);
+// IpAddress.loopback (or "127.0.0.1") keeps it to programs on this machine. A Unix domain
 // socket's file is made as it starts listening (an IOException where a file of that name is
 // there already: one an earlier program left is deleted first) and removed as it is closed;
 // who may connect is who may open that file.
 class ServerSocket : AutoCloseable {
   private val handle : any
 
-  fun init(port : int | FilePath = 0, backlog : int = 50, bindAddress : string? = null) throws IOException {
+  fun init(port : int | FilePath = 0, backlog : int = 50, bindAddress : (string | IpAddress)? = null) throws IOException {
     if (port is FilePath) {
       if (bindAddress != null) { throw IllegalArgumentException("a Unix domain socket listens at its file, with no address to bind") }
       // Not in a sandbox, which reaches no socket but its own (an IOException).
@@ -430,7 +438,7 @@ class ServerSocket : AutoCloseable {
     }
     // In a sandbox, a port of its own, which its network.connect reaches (M6.6.2).
     val box = Sandbox.current
-    this.handle = box == null ? __io.listen(port as int, bindAddress, backlog) : box.network.listen(port as int)
+    this.handle = box == null ? __io.listen(port as int, bindAddress == null ? null : "$bindAddress", backlog) : box.network.listen(port as int)
   }
 
   // The port it listens on, the one the system picked where it was made with port 0; an
@@ -514,4 +522,10 @@ external object __io {
   fun socketPath(handle : any) : string?
   fun socketTimeout(handle : any, millis : int)
   fun shutdownOutput(handle : any) throws IOException
+  fun lookup(host : string) : List<string> throws UnknownHostException
+  fun reverseLookup(address : string) : string?
+  fun hostName() : string
+  fun openDatagram(port : int, address : string? = null) : any throws IOException
+  fun sendDatagram(handle : any, data : Bytes, offset : int, count : int, address : string, port : int) throws IOException
+  fun receiveDatagram(handle : any, max : int) : List<any> throws IOException
 }

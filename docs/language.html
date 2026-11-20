@@ -435,6 +435,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-list-ww">list.ww</a></li>
 <li><a href="#file-localtime-ww">localtime.ww</a></li>
 <li><a href="#file-map-ww">map.ww</a></li>
+<li><a href="#file-net-ww">net.ww</a></li>
 <li><a href="#file-numeric-ww">numeric.ww</a></li>
 <li><a href="#file-paint-ww">paint.ww</a></li>
 <li><a href="#file-parallel-ww">parallel.ww</a></li>
@@ -445,6 +446,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-regex-ww">regex.ww</a></li>
 <li><a href="#file-sandbox-ww">sandbox.ww</a></li>
 <li><a href="#file-script-ww">script.ww</a></li>
+<li><a href="#file-securerandom-ww">securerandom.ww</a></li>
 <li><a href="#file-sequence-ww">sequence.ww</a></li>
 <li><a href="#file-set-ww">set.ww</a></li>
 <li><a href="#file-string-ww">string.ww</a></li>
@@ -501,10 +503,13 @@ addButton(widgets)</pre></dd>
 <li><a href="#Countdown"><code>Countdown</code></a> (4)</li>
 <li><a href="#CycleMethod"><code>CycleMethod</code></a> (1)</li>
 <li><a href="#DataFormatException"><code>DataFormatException</code></a> (1)</li>
+<li><a href="#Datagram"><code>Datagram</code></a> (1)</li>
+<li><a href="#DatagramSocket"><code>DatagramSocket</code></a> (8)</li>
 <li><a href="#Dct"><code>Dct</code></a> (3)</li>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
 <li><a href="#DirEntry"><code>DirEntry</code></a> (2)</li>
 <li><a href="#Dither"><code>Dither</code></a> (1)</li>
+<li><a href="#Dns"><code>Dns</code></a> (5)</li>
 <li><a href="#Drawable"><code>Drawable</code></a> (3)</li>
 <li><a href="#Duration"><code>Duration</code></a> (25)</li>
 <li><a href="#Environment"><code>Environment</code></a> (8)</li>
@@ -542,6 +547,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Interpolation"><code>Interpolation</code></a> (1)</li>
 <li><a href="#InterruptedException"><code>InterruptedException</code></a> (1)</li>
 <li><a href="#InvocationTargetException"><code>InvocationTargetException</code></a> (1)</li>
+<li><a href="#IpAddress"><code>IpAddress</code></a> (17)</li>
 <li><a href="#Iterable"><code>Iterable</code></a> (2)</li>
 <li><a href="#Iterator"><code>Iterator</code></a> (3)</li>
 <li><a href="#JadeDB"><code>JadeDB</code></a> (28)</li>
@@ -636,6 +642,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ScriptLimitException"><code>ScriptLimitException</code></a> (1)</li>
 <li><a href="#ScriptProblem"><code>ScriptProblem</code></a> (2)</li>
 <li><a href="#ScriptVM"><code>ScriptVM</code></a> (6)</li>
+<li><a href="#SecureRandom"><code>SecureRandom</code></a> (5)</li>
 <li><a href="#SecurityException"><code>SecurityException</code></a> (1)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
@@ -645,7 +652,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#SharedMap"><code>SharedMap</code></a> (12)</li>
 <li><a href="#SharedSet"><code>SharedSet</code></a> (7)</li>
 <li><a href="#Size"><code>Size</code></a> (3)</li>
-<li><a href="#Socket"><code>Socket</code></a> (14)</li>
+<li><a href="#Socket"><code>Socket</code></a> (15)</li>
+<li><a href="#SocketAddress"><code>SocketAddress</code></a> (3)</li>
 <li><a href="#SocketTimeoutException"><code>SocketTimeoutException</code></a> (1)</li>
 <li><a href="#StackOverflowError"><code>StackOverflowError</code></a> (1)</li>
 <li><a href="#Stream"><code>Stream</code></a> (1)</li>
@@ -669,6 +677,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Triple"><code>Triple</code></a> (2)</li>
 <li><a href="#Typeface"><code>Typeface</code></a> (28)</li>
 <li><a href="#UncheckedIOException"><code>UncheckedIOException</code></a> (1)</li>
+<li><a href="#UnknownHostException"><code>UnknownHostException</code></a> (1)</li>
 <li><a href="#UnsupportedOperationException"><code>UnsupportedOperationException</code></a> (1)</li>
 <li><a href="#Values.size"><code>Values</code></a> (51)</li>
 <li><a href="#WindowShape"><code>WindowShape</code></a> (1)</li>
@@ -2727,6 +2736,9 @@ Exception: everything else, which a bare `catch (e)` catches.
 <div class="entry" id="SocketTimeoutException"><code class="sig">class SocketTimeoutException(message : string? = &quot;the read timed out&quot;) : IOException(message)</code><a class="anchor" href="#SocketTimeoutException">#</a>
 <p>A socket's read that waited longer than its readTimeout, an IOException as in Java.</p>
 </div>
+<div class="entry" id="UnknownHostException"><code class="sig">class UnknownHostException(message : string? = &quot;the host was not found&quot;) : IOException(message)</code><a class="anchor" href="#UnknownHostException">#</a>
+<p>A name the system's resolver could not find (Dns.lookup, a Socket given a host), an IOException as in Java.</p>
+</div>
 <div class="entry" id="UncheckedIOException"><code class="sig">class UncheckedIOException(cause : IOException) : RuntimeException(cause.message, cause)</code><a class="anchor" href="#UncheckedIOException">#</a>
 <p>An IOException where nothing checked can be thrown: a line read lazily by a sequence. <code>cause</code> is the IOException, as in Java.</p>
 </div>
@@ -4305,7 +4317,10 @@ Socket(FilePath(&quot;/run/app.sock&quot;)).use { it.writer.write(&quot;status\n
 <div class="entry member" id="Socket.connect"><code class="sig">fun connect(host : string, port : int, timeout : Duration? = null) : Socket throws IOException</code><a class="anchor" href="#Socket.connect">#</a>
 <p>With a time limit, gives up when it runs out.</p>
 </div>
-<div class="entry member" id="Socket.connect-2"><code class="sig">fun connect(path : FilePath, timeout : Duration? = null) : Socket throws IOException</code><a class="anchor" href="#Socket.connect-2">#</a>
+<div class="entry member" id="Socket.connect-2"><code class="sig">fun connect(to : SocketAddress, timeout : Duration? = null) : Socket throws IOException</code><a class="anchor" href="#Socket.connect-2">#</a>
+<p>To an address and port (networking plan, part 1); with a time limit, gives up when it runs out.</p>
+</div>
+<div class="entry member" id="Socket.connect-3"><code class="sig">fun connect(path : FilePath, timeout : Duration? = null) : Socket throws IOException</code><a class="anchor" href="#Socket.connect-3">#</a>
 <p>To the Unix domain socket whose file is <code>path</code> (2026-11-19); with a time limit, gives up when it runs out. Not in a sandbox, which reaches no socket but its own (an IOException).</p>
 </div>
 <div class="entry member" id="Socket.reader"><code class="sig">val reader : Reader</code><a class="anchor" href="#Socket.reader">#</a>
@@ -4350,7 +4365,7 @@ while (true) {
 }
 val local = ServerSocket(FilePath(&quot;/run/app.sock&quot;))   // for programs on this machine alone
 </pre>
-<p>Port 0 lets the system pick a free one (see localPort). With no address it takes connections from anywhere; &quot;127.0.0.1&quot; keeps it to programs on this machine. A Unix domain socket's file is made as it starts listening (an IOException where a file of that name is there already: one an earlier program left is deleted first) and removed as it is closed; who may connect is who may open that file.</p>
+<p>Port 0 lets the system pick a free one (see localPort). With no address it takes connections from anywhere, over IPv4 and IPv6 both (IPv4 alone where the machine has no IPv6); IpAddress.loopback (or &quot;127.0.0.1&quot;) keeps it to programs on this machine. A Unix domain socket's file is made as it starts listening (an IOException where a file of that name is there already: one an earlier program left is deleted first) and removed as it is closed; who may connect is who may open that file.</p>
 </div>
 <div class="entry member" id="ServerSocket.localPort"><code class="sig">val localPort : int</code><a class="anchor" href="#ServerSocket.localPort">#</a>
 <p>The port it listens on, the one the system picked where it was made with port 0; an IllegalStateException where it listens at a Unix domain socket's file, an IOException once it is closed.</p>
@@ -5233,6 +5248,130 @@ S...      the fraction of the second, as many digits as letters
 </div>
 <div class="entry" id="Map.sumOf"><code class="sig">inline fun &lt;K, V, R : Number&gt; Map&lt;K, V&gt;.sumOf(selector : (MapEntry&lt;K, V&gt;) -&gt; R) : R</code><a class="anchor" href="#Map.sumOf">#</a>
 <p>The sum of what <code>selector</code> gives for each entry; 0 for an empty map.</p>
+</div>
+</section>
+<section class="file" id="file-net-ww">
+<h2>net.ww</h2>
+<h3>Addresses, names and datagrams (networking plan, part 1, 2026-11-20)</h3>
+<p>What a program needs of the network besides a TCP connection (Socket and ServerSocket, in io.ww): an internet address, an address with a port, looking a name up, and UDP's datagrams. Cryptography and TLS are <code>import Crypto</code>, HTTP is <code>import Web</code> (docs/networking-plan.html).</p>
+<div class="entry" id="IpAddress"><code class="sig">class IpAddress</code><a class="anchor" href="#IpAddress">#</a>
+<p>An internet address, IPv4 or IPv6: the number alone (Java's InetAddress without its name). Making one never asks the network; a name is looked up with Dns.</p>
+<pre>val home = IpAddress(&quot;192.168.1.10&quot;)
+val here = IpAddress(&quot;::1&quot;)
+print(home.isPrivate, here.isLoopback, IpAddress.parse(&quot;example.org&quot;))   // true true null
+</pre>
+<p>Equal addresses are equal (==) and one key; &quot;$address&quot; is its text, IPv6 in its shortest form (RFC 5952: &quot;2001:db8::1&quot;). IPv6 with IPv4 inside (::ffff:1.2.3.4) is IPv6 here, as written; one a socket hands over (a datagram's sender, say) is given as the IPv4 address.</p>
+</div>
+<div class="entry member" id="IpAddress.isIpv6"><code class="sig">val isIpv6 : bool</code><a class="anchor" href="#IpAddress.isIpv6">#</a>
+<p>Whether it is an IPv6 address; false for IPv4.</p>
+</div>
+<div class="entry member" id="IpAddress.loopback"><code class="sig">val loopback</code><a class="anchor" href="#IpAddress.loopback">#</a>
+<p>127.0.0.1, this machine over IPv4.</p>
+</div>
+<div class="entry member" id="IpAddress.loopback6"><code class="sig">val loopback6</code><a class="anchor" href="#IpAddress.loopback6">#</a>
+<p>::1, this machine over IPv6.</p>
+</div>
+<div class="entry member" id="IpAddress.any"><code class="sig">val any</code><a class="anchor" href="#IpAddress.any">#</a>
+<p>0.0.0.0, every IPv4 address of this machine, where a socket listens.</p>
+</div>
+<div class="entry member" id="IpAddress.any6"><code class="sig">val any6</code><a class="anchor" href="#IpAddress.any6">#</a>
+<p>::, every IPv6 address of this machine, where a socket listens.</p>
+</div>
+<div class="entry member" id="IpAddress.parse"><code class="sig">fun parse(text : string) : IpAddress?</code><a class="anchor" href="#IpAddress.parse">#</a>
+<p>The address written in <code>text</code>, or null where it is none.</p>
+</div>
+<div class="entry member" id="IpAddress.isIpv4"><code class="sig">val isIpv4 : bool</code><a class="anchor" href="#IpAddress.isIpv4">#</a>
+<p>Whether it is an IPv4 address.</p>
+</div>
+<div class="entry member" id="IpAddress.bytes"><code class="sig">val bytes : Bytes</code><a class="anchor" href="#IpAddress.bytes">#</a>
+<p>Its 4 bytes (IPv4) or 16 (IPv6), the highest first: a copy each time.</p>
+</div>
+<div class="entry member" id="IpAddress.isLoopback"><code class="sig">val isLoopback : bool</code><a class="anchor" href="#IpAddress.isLoopback">#</a>
+<p>Whether it is this machine: 127.0.0.0 to 127.255.255.255, or ::1.</p>
+</div>
+<div class="entry member" id="IpAddress.isAny"><code class="sig">val isAny : bool</code><a class="anchor" href="#IpAddress.isAny">#</a>
+<p>Whether it is no address in particular, the one a socket listens at for all: 0.0.0.0 or ::.</p>
+</div>
+<div class="entry member" id="IpAddress.isLinkLocal"><code class="sig">val isLinkLocal : bool</code><a class="anchor" href="#IpAddress.isLinkLocal">#</a>
+<p>Whether it reaches only the local link: 169.254.0.0/16, or fe80::/10.</p>
+</div>
+<div class="entry member" id="IpAddress.isPrivate"><code class="sig">val isPrivate : bool</code><a class="anchor" href="#IpAddress.isPrivate">#</a>
+<p>Whether it is a private network's (RFC 1918's 10/8, 172.16/12 and 192.168/16; IPv6's unique local fc00::/7), never seen on the internet.</p>
+</div>
+<div class="entry member" id="IpAddress.isMulticast"><code class="sig">val isMulticast : bool</code><a class="anchor" href="#IpAddress.isMulticast">#</a>
+<p>Whether it is a group's, sent to all who joined it: 224.0.0.0/4, or ff00::/8.</p>
+</div>
+<div class="entry member" id="IpAddress.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#IpAddress.==">#</a>
+<p>Whether <code>other</code> is the same address: IPv4's 0.0.0.1 and IPv6's ::1 differ.</p>
+</div>
+<div class="entry member" id="IpAddress.hashCode"><code class="sig">fun hashCode() : int</code><a class="anchor" href="#IpAddress.hashCode">#</a>
+<p>The same for equal addresses, so that an address is a key.</p>
+</div>
+<div class="entry member" id="IpAddress.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#IpAddress.toString">#</a>
+<p>&quot;192.168.1.10&quot;, or IPv6 in its shortest form: &quot;2001:db8::1&quot;, &quot;::ffff:1.2.3.4&quot;.</p>
+</div>
+<div class="entry" id="SocketAddress"><code class="sig">data SocketAddress(val address : IpAddress, val port : int)</code><a class="anchor" href="#SocketAddress">#</a>
+<p>An IP address and a port: where a socket connects, listens, or sends a datagram (Java's InetSocketAddress, never looked up). &quot;$address&quot; is &quot;1.2.3.4:53&quot;, or &quot;[::1]:53&quot; for IPv6.</p>
+</div>
+<div class="entry member" id="SocketAddress.parse"><code class="sig">fun parse(text : string) : SocketAddress?</code><a class="anchor" href="#SocketAddress.parse">#</a>
+<p>The address and port written in <code>text</code>, &quot;1.2.3.4:53&quot; or &quot;[::1]:53&quot;; null where it is not.</p>
+</div>
+<div class="entry member" id="SocketAddress.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#SocketAddress.toString">#</a>
+<p>&quot;1.2.3.4:53&quot;, or &quot;[::1]:53&quot; for IPv6, as parse reads it.</p>
+</div>
+<div class="entry" id="Dns"><code class="sig">object Dns</code><a class="anchor" href="#Dns">#</a>
+<p>Looking names up, through the system's resolver (getaddrinfo: its hosts file, its DNS servers, its cache). Each call waits for the answer, as a socket's read does.</p>
+<pre>val addresses = Dns.lookup(&quot;example.org&quot;)     // IPv4 and IPv6, in the order the system prefers
+print(Dns.reverse(IpAddress.loopback), Dns.localHostName)
+</pre>
+<p>Records of DNS's own (MX, TXT and the rest) are not the resolver's to give: a program that needs them speaks DNS over a DatagramSocket. Not in a sandbox, whose network has no names to look up (an IOException).</p>
+</div>
+<div class="entry member" id="Dns.lookup"><code class="sig">fun lookup(host : string) : List&lt;IpAddress&gt; throws UnknownHostException</code><a class="anchor" href="#Dns.lookup">#</a>
+<p>The addresses <code>host</code> is at, each once; an address written as text is its own answer. An UnknownHostException, an IOException, where the name is not found.</p>
+</div>
+<div class="entry member" id="Dns.lookupFirst"><code class="sig">fun lookupFirst(host : string) : IpAddress throws UnknownHostException</code><a class="anchor" href="#Dns.lookupFirst">#</a>
+<p>The address the system prefers of those <code>host</code> is at; an UnknownHostException where none.</p>
+</div>
+<div class="entry member" id="Dns.reverse"><code class="sig">fun reverse(address : IpAddress) : string?</code><a class="anchor" href="#Dns.reverse">#</a>
+<p>The name the address has, as the resolver gives it; null where it has none.</p>
+</div>
+<div class="entry member" id="Dns.localHostName"><code class="sig">val localHostName : string</code><a class="anchor" href="#Dns.localHostName">#</a>
+<p>This machine's name.</p>
+</div>
+<div class="entry" id="DatagramSocket"><code class="sig">class DatagramSocket : AutoCloseable</code><a class="anchor" href="#DatagramSocket">#</a>
+<p>A UDP socket: datagrams sent and received whole, each on its own, with no connection (Java's DatagramSocket). A datagram may be lost, come twice or come out of order; what needs them all, in order, is built on top (a DNS client asks again).</p>
+<pre>DatagramSocket(5353).use { udp -&gt;              // no address: IPv4 and IPv6 both
+  udp.readTimeout = 2.seconds
+  val query = udp.receive()                   // waits; a Datagram
+  udp.send(answer(query.data), query.from)
+}
+DatagramSocket().send(&quot;ping&quot;.toBytes(), SocketAddress(IpAddress.loopback, 5353))
+</pre>
+<p>Port 0 lets the system pick a free one (see localPort). With no address it takes datagrams at every address of this machine, IPv4 and IPv6; IpAddress.loopback keeps it to programs on this machine. receive() waits on the thread it runs on, as a socket's read does. Not in a sandbox, whose network has TCP alone (an IOException).</p>
+</div>
+<div class="entry member" id="DatagramSocket.send"><code class="sig">fun send(data : Bytes, to : SocketAddress, offset : int = 0, size : int = data.size - offset) throws IOException</code><a class="anchor" href="#DatagramSocket.send">#</a>
+<p>Sends <code>size</code> of the bytes from <code>offset</code> as one datagram to <code>to</code>. It does not wait for it to arrive, nor say whether it did. An IOException where the system will not send it (too large, say: 65,507 bytes is the most IPv4 carries).</p>
+</div>
+<div class="entry member" id="DatagramSocket.receive"><code class="sig">fun receive(maxSize : int = 65535) : Datagram throws IOException</code><a class="anchor" href="#DatagramSocket.receive">#</a>
+<p>Waits for the next datagram and gives it with where it came from. Of one longer than <code>maxSize</code> bytes, the rest is lost. A SocketTimeoutException, an IOException, where none came within readTimeout; an IOException where the socket is closed while it waits.</p>
+</div>
+<div class="entry member" id="DatagramSocket.readTimeout"><code class="sig">var readTimeout : Duration?</code><a class="anchor" href="#DatagramSocket.readTimeout">#</a>
+<p>How long receive() waits before it fails with a SocketTimeoutException; null for as long as it takes.</p>
+</div>
+<div class="entry member" id="DatagramSocket.localPort"><code class="sig">val localPort : int</code><a class="anchor" href="#DatagramSocket.localPort">#</a>
+<p>The port it is at, the one the system picked where it was made with port 0.</p>
+</div>
+<div class="entry member" id="DatagramSocket.localAddress"><code class="sig">val localAddress : IpAddress</code><a class="anchor" href="#DatagramSocket.localAddress">#</a>
+<p>The address it is at: IpAddress.any6 (or any) where it takes datagrams at every address.</p>
+</div>
+<div class="entry member" id="DatagramSocket.isClosed"><code class="sig">val isClosed : bool</code><a class="anchor" href="#DatagramSocket.isClosed">#</a>
+<p>Whether it has been closed.</p>
+</div>
+<div class="entry member" id="DatagramSocket.close"><code class="sig">override fun close()</code><a class="anchor" href="#DatagramSocket.close">#</a>
+<p>Closes it. A thread waiting in receive() gets an IOException.</p>
+</div>
+<div class="entry" id="Datagram"><code class="sig">data Datagram(val data : Bytes, val from : SocketAddress)</code><a class="anchor" href="#Datagram">#</a>
+<p>One datagram as received: its bytes, and the address and port it came from (the one to answer to).</p>
 </div>
 </section>
 <section class="file" id="file-numeric-ww">
@@ -6681,6 +6820,30 @@ depth   how deep its calls go: deeper is a StackOverflowError in the script
 <p>The top level, as the script starts, is a call as any. A call that ends by a limit ends at once, no catch or finally of the script's run, and is a ScriptLimitException in the program; the script goes on for the next, what it was in the middle of left as it was. A program whose scripts keep passing their limits stops them (a game: a mod disabled after a few).</p>
 </div>
 <h3>What the compiler and the contract's proxies call</h3>
+</section>
+<section class="file" id="file-securerandom-ww">
+<h2>securerandom.ww</h2>
+<h3>Secure random numbers (networking plan, part 1, 2026-11-20)</h3>
+<div class="entry" id="SecureRandom"><code class="sig">object SecureRandom</code><a class="anchor" href="#SecureRandom">#</a>
+<p>Random numbers no one can guess or repeat, for keys, tokens, passwords and nonces: from the system's own generator (BCryptGenRandom on Windows, getrandom on Linux), which is seeded from the machine's sources of chance. Math.random and Math.randomInt are quicker and can be seeded to repeat, for games and tests; these can not, by design.</p>
+<pre>val key = SecureRandom.bytes(32)
+val token = Base64.encode(SecureRandom.bytes(18))
+val roll = SecureRandom.randomInt(1, 6)
+</pre>
+<p>Safe from every thread and worker at once; there is nothing to make or seed.</p>
+</div>
+<div class="entry member" id="SecureRandom.random"><code class="sig">fun random() : float</code><a class="anchor" href="#SecureRandom.random">#</a>
+<p>A float from 0.0 up to 1.0, not including 1.0.</p>
+</div>
+<div class="entry member" id="SecureRandom.randomInt"><code class="sig">fun randomInt(low : int, high : int) : int</code><a class="anchor" href="#SecureRandom.randomInt">#</a>
+<p>An int from <code>low</code> to <code>high</code>, both included, every one as likely; an IllegalArgumentException where <code>low</code> is above <code>high</code>.</p>
+</div>
+<div class="entry member" id="SecureRandom.bytes"><code class="sig">fun bytes(size : int) : Bytes</code><a class="anchor" href="#SecureRandom.bytes">#</a>
+<p><code>size</code> new random bytes; an IllegalArgumentException for a negative size.</p>
+</div>
+<div class="entry member" id="SecureRandom.fill"><code class="sig">fun fill(into : Bytes, offset : int = 0, size : int = into.size - offset) : Bytes</code><a class="anchor" href="#SecureRandom.fill">#</a>
+<p>Makes <code>size</code> of the bytes from <code>offset</code> random, in place, and gives the bytes.</p>
+</div>
 </section>
 <section class="file" id="file-sequence-ww">
 <h2>sequence.ww</h2>

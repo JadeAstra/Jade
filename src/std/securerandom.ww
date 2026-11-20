@@ -1,0 +1,33 @@
+// ---- Secure random numbers (networking plan, part 1, 2026-11-20) ----
+
+// Random numbers no one can guess or repeat, for keys, tokens, passwords and nonces: from the
+// system's own generator (BCryptGenRandom on Windows, getrandom on Linux), which is seeded from
+// the machine's sources of chance. Math.random and Math.randomInt are quicker and can be seeded
+// to repeat, for games and tests; these can not, by design.
+//
+//   val key = SecureRandom.bytes(32)
+//   val token = Base64.encode(SecureRandom.bytes(18))
+//   val roll = SecureRandom.randomInt(1, 6)
+//
+// Safe from every thread and worker at once; there is nothing to make or seed.
+object SecureRandom {
+  // A float from 0.0 up to 1.0, not including 1.0.
+  fun random() : float => __secureRandom.random()
+  // An int from `low` to `high`, both included, every one as likely; an
+  // IllegalArgumentException where `low` is above `high`.
+  fun randomInt(low : int, high : int) : int => __secureRandom.randomInt(low, high)
+  // `size` new random bytes; an IllegalArgumentException for a negative size.
+  fun bytes(size : int) : Bytes {
+    if (size < 0) { throw IllegalArgumentException("a size is 0 or more, not $size") }
+    return __secureRandom.fill(Bytes(size), 0, size)
+  }
+  // Makes `size` of the bytes from `offset` random, in place, and gives the bytes.
+  fun fill(into : Bytes, offset : int = 0, size : int = into.size - offset) : Bytes => __secureRandom.fill(into, offset, size)
+}
+
+// What SecureRandom is built on (crypto/random.cpp).
+external object __secureRandom {
+  fun random() : float
+  fun randomInt(low : int, high : int) : int
+  fun fill(into : Bytes, offset : int, count : int) : Bytes
+}

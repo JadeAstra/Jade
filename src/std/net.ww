@@ -1,0 +1,347 @@
+// ---- Addresses, names and datagrams (networking plan, part 1, 2026-11-20) ----
+// What a program needs of the network besides a TCP connection (Socket and ServerSocket, in
+// io.ww): an internet address, an address with a port, looking a name up, and UDP's datagrams.
+// Cryptography and TLS are `import Crypto`, HTTP is `import Web` (docs/networking-plan.html).
+
+// An internet address, IPv4 or IPv6: the number alone (Java's InetAddress without its name).
+// Making one never asks the network; a name is looked up with Dns.
+//
+//   val home = IpAddress("192.168.1.10")
+//   val here = IpAddress("::1")
+//   print(home.isPrivate, here.isLoopback, IpAddress.parse("example.org"))   // true true null
+//
+// Equal addresses are equal (==) and one key; "$address" is its text, IPv6 in its shortest
+// form (RFC 5952: "2001:db8::1"). IPv6 with IPv4 inside (::ffff:1.2.3.4) is IPv6 here, as
+// written; one a socket hands over (a datagram's sender, say) is given as the IPv4 address.
+class IpAddress {
+  // IPv6's first 64 bits; 0 for IPv4.
+  private val high : int
+  // IPv6's last 64 bits; IPv4's 32, in the lowest.
+  private val low : int
+  // Whether it is an IPv6 address; false for IPv4.
+  val isIpv6 : bool
+
+  // From its text, "192.168.1.10" or "2001:db8::1", or from its 4 or 16 bytes, the highest
+  // first. An IllegalArgumentException where it is no address: a name is looked up with
+  // Dns.lookup, and a zone ("fe80::1%eth0") is not taken.
+  fun init(source : string | Bytes) {
+    val parts = source is Bytes ? __ipFromBytes(source as Bytes) : __ipParse(source as string)
+    if (parts == null) {
+      throw IllegalArgumentException("'$source' is not an IPv4 or IPv6 address (a name is looked up with Dns.lookup)")
+    }
+    this.high = parts[0]
+    this.low = parts[1]
+    this.isIpv6 = parts[2] == 1
+  }
+
+  static {
+    // 127.0.0.1, this machine over IPv4.
+    val loopback = IpAddress("127.0.0.1")
+    // ::1, this machine over IPv6.
+    val loopback6 = IpAddress("::1")
+    // 0.0.0.0, every IPv4 address of this machine, where a socket listens.
+    val any = IpAddress("0.0.0.0")
+    // ::, every IPv6 address of this machine, where a socket listens.
+    val any6 = IpAddress("::")
+
+    // The address written in `text`, or null where it is none.
+    fun parse(text : string) : IpAddress? => __ipParse(text) == null ? null : IpAddress(text)
+  }
+
+  // Whether it is an IPv4 address.
+  val isIpv4 : bool
+    get() => !isIpv6
+  // Its 4 bytes (IPv4) or 16 (IPv6), the highest first: a copy each time.
+  val bytes : Bytes
+    get() => isIpv6 ? Bytes(16).putInt64(0, high, true).putInt64(8, low, true) : Bytes(4).putUint32(0, low, true)
+  // Whether it is this machine: 127.0.0.0 to 127.255.255.255, or ::1.
+  val isLoopback : bool
+    get() => isIpv6 ? high == 0 and low == 1 : (low >>> 24) == 127
+  // Whether it is no address in particular, the one a socket listens at for all: 0.0.0.0 or ::.
+  val isAny : bool
+    get() => high == 0 and low == 0
+  // Whether it reaches only the local link: 169.254.0.0/16, or fe80::/10.
+  val isLinkLocal : bool
+    get() => isIpv6 ? (high >>> 54) == 0x3FA : (low >>> 16) == 0xA9FE
+  // Whether it is a private network's (RFC 1918's 10/8, 172.16/12 and 192.168/16; IPv6's
+  // unique local fc00::/7), never seen on the internet.
+  val isPrivate : bool
+    get() => isIpv6 ? (high >>> 57) == 0x7E : (low >>> 24) == 10 or (low >>> 20) == 0xAC1 or (low >>> 16) == 0xC0A8
+  // Whether it is a group's, sent to all who joined it: 224.0.0.0/4, or ff00::/8.
+  val isMulticast : bool
+    get() => isIpv6 ? (high >>> 56) == 0xFF : (low >>> 28) == 0xE
+
+  // Whether `other` is the same address: IPv4's 0.0.0.1 and IPv6's ::1 differ.
+  op ==(other : any?) : bool {
+    if (other !is IpAddress) { return false }
+    val that = other as IpAddress
+    return high == that.high and low == that.low and isIpv6 == that.isIpv6
+  }
+  // The same for equal addresses, so that an address is a key.
+  fun hashCode() : int => ((high &* 31) &+ low) &* 31 &+ (isIpv6 ? 1 : 0)
+
+  // "192.168.1.10", or IPv6 in its shortest form: "2001:db8::1", "::ffff:1.2.3.4".
+  override fun toString() : string {
+    if (!isIpv6) { return __ipv4Text(low) }
+    if (high == 0 and (low >>> 32) == 0xFFFF) { return "::ffff:" + __ipv4Text(low & 0xFFFFFFFF) }
+    val groups = [
+      (high >>> 48) & 0xFFFF, (high >>> 32) & 0xFFFF, (high >>> 16) & 0xFFFF, high & 0xFFFF,
+      (low >>> 48) & 0xFFFF, (low >>> 32) & 0xFFFF, (low >>> 16) & 0xFFFF, low & 0xFFFF,
+    ]
+    // The longest run of zero groups, the first of the longest, if two or more long, is "::".
+    var bestStart = -1
+    var bestSize = 1
+    var i = 0
+    while (i < 8) {
+      if (groups[i] != 0) {
+        i++
+        continue
+      }
+      var end = i
+      while (end < 8 and groups[end] == 0) { end++ }
+      if (end - i > bestSize) {
+        bestStart = i
+        bestSize = end - i
+      }
+      i = end
+    }
+    val text = StringBuilder()
+    i = 0
+    while (i < 8) {
+      if (i == bestStart) {
+        text.append("::")
+        i += bestSize
+        continue
+      }
+      if (i > 0 and i != bestStart + bestSize) { text.append(":") }
+      text.append(groups[i].toString(16))
+      i++
+    }
+    return text.toString()
+  }
+}
+
+// An IP address and a port: where a socket connects, listens, or sends a datagram (Java's
+// InetSocketAddress, never looked up). "$address" is "1.2.3.4:53", or "[::1]:53" for IPv6.
+data SocketAddress(val address : IpAddress, val port : int) {
+  init {
+    if (port < 0 or port > 65535) { throw IllegalArgumentException("a port is from 0 to 65535, not $port") }
+  }
+  // From an address's text: SocketAddress("127.0.0.1", 53).
+  constructor(address : string, port : int) : this(IpAddress(address), port)
+
+  static {
+    // The address and port written in `text`, "1.2.3.4:53" or "[::1]:53"; null where it is not.
+    fun parse(text : string) : SocketAddress? {
+      val colon = text.lastIndexOf(':')
+      if (colon <= 0 or colon == text.size - 1) { return null }
+      val digits = text[colon + 1..]
+      for (c in digits) {
+        if (!c.isDigit()) { return null }
+      }
+      val port = digits.toIntOrNull()
+      if (port == null or port!! > 65535) { return null }
+      val host = text[0..<colon]
+      val bracketed = host.startsWith("[") and host.endsWith("]") and host.size >= 2
+      val address = IpAddress.parse(bracketed ? host[1..<host.size - 1] : host)
+      if (address == null or address!!.isIpv6 != bracketed) { return null }
+      return SocketAddress(address!!, port!!)
+    }
+  }
+
+  // "1.2.3.4:53", or "[::1]:53" for IPv6, as parse reads it.
+  override fun toString() : string => address.isIpv6 ? "[$address]:$port" : "$address:$port"
+}
+
+// Looking names up, through the system's resolver (getaddrinfo: its hosts file, its DNS
+// servers, its cache). Each call waits for the answer, as a socket's read does.
+//
+//   val addresses = Dns.lookup("example.org")     // IPv4 and IPv6, in the order the system prefers
+//   print(Dns.reverse(IpAddress.loopback), Dns.localHostName)
+//
+// Records of DNS's own (MX, TXT and the rest) are not the resolver's to give: a program that
+// needs them speaks DNS over a DatagramSocket. Not in a sandbox, whose network has no names to
+// look up (an IOException).
+object Dns {
+  // The addresses `host` is at, each once; an address written as text is its own answer. An
+  // UnknownHostException, an IOException, where the name is not found.
+  fun lookup(host : string) : List<IpAddress> throws UnknownHostException {
+    val literal = IpAddress.parse(host)
+    if (literal != null) { return [literal!!] }
+    return __io.lookup(host).map { IpAddress(it) }
+  }
+  // The address the system prefers of those `host` is at; an UnknownHostException where none.
+  fun lookupFirst(host : string) : IpAddress throws UnknownHostException => lookup(host)[0]
+  // The name the address has, as the resolver gives it; null where it has none.
+  fun reverse(address : IpAddress) : string? => __io.reverseLookup("$address")
+  // This machine's name.
+  val localHostName : string
+    get() => __io.hostName()
+}
+
+// A UDP socket: datagrams sent and received whole, each on its own, with no connection (Java's
+// DatagramSocket). A datagram may be lost, come twice or come out of order; what needs them
+// all, in order, is built on top (a DNS client asks again).
+//
+//   DatagramSocket(5353).use { udp ->              // no address: IPv4 and IPv6 both
+//     udp.readTimeout = 2.seconds
+//     val query = udp.receive()                   // waits; a Datagram
+//     udp.send(answer(query.data), query.from)
+//   }
+//   DatagramSocket().send("ping".toBytes(), SocketAddress(IpAddress.loopback, 5353))
+//
+// Port 0 lets the system pick a free one (see localPort). With no address it takes datagrams
+// at every address of this machine, IPv4 and IPv6; IpAddress.loopback keeps it to programs on
+// this machine. receive() waits on the thread it runs on, as a socket's read does. Not in a
+// sandbox, whose network has TCP alone (an IOException).
+class DatagramSocket : AutoCloseable {
+  private val handle : any
+  private var readLimit : Duration? = null
+
+  fun init(port : int = 0, bindAddress : (string | IpAddress)? = null) throws IOException {
+    this.handle = __io.openDatagram(port, bindAddress == null ? null : "$bindAddress")
+  }
+
+  // Sends `size` of the bytes from `offset` as one datagram to `to`. It does not wait for it
+  // to arrive, nor say whether it did. An IOException where the system will not send it (too
+  // large, say: 65,507 bytes is the most IPv4 carries).
+  fun send(data : Bytes, to : SocketAddress, offset : int = 0, size : int = data.size - offset) throws IOException {
+    __io.sendDatagram(handle, data, offset, size, "${to.address}", to.port)
+  }
+
+  // Waits for the next datagram and gives it with where it came from. Of one longer than
+  // `maxSize` bytes, the rest is lost. A SocketTimeoutException, an IOException, where none
+  // came within readTimeout; an IOException where the socket is closed while it waits.
+  fun receive(maxSize : int = 65535) : Datagram throws IOException {
+    val got = __io.receiveDatagram(handle, maxSize)
+    return Datagram(got[0] as Bytes, SocketAddress(IpAddress(got[1] as string), got[2] as int))
+  }
+
+  // How long receive() waits before it fails with a SocketTimeoutException; null for as long
+  // as it takes.
+  var readTimeout : Duration?
+    get() => readLimit
+    set(limit) {
+      readLimit = limit
+      __io.socketTimeout(handle, limit == null ? 0 : limit.waitMilliseconds)
+    }
+
+  // The port it is at, the one the system picked where it was made with port 0.
+  val localPort : int
+    get() => __io.socketInfo(handle)[0] as int
+  // The address it is at: IpAddress.any6 (or any) where it takes datagrams at every address.
+  val localAddress : IpAddress
+    get() => IpAddress(__io.socketInfo(handle)[3] as string)
+  // Whether it has been closed.
+  val isClosed : bool
+    get() => !__io.isOpen(handle)
+
+  // Closes it. A thread waiting in receive() gets an IOException.
+  override fun close() {
+    __io.close(handle)
+  }
+}
+
+// One datagram as received: its bytes, and the address and port it came from (the one to
+// answer to).
+data Datagram(val data : Bytes, val from : SocketAddress)
+
+// The address written in `text` as [high 64 bits, low 64 bits, 1 for IPv6 or 0 for IPv4], or
+// null where it is none.
+fun __ipParse(text : string) : List<int>? {
+  if (text.indexOf(':') < 0) {
+    val v4 = __ipv4Of(text)
+    return v4 < 0 ? null : [0, v4, 0]
+  }
+  // IPv6: eight groups of up to four hex digits, "::" once at most for a run of zero groups,
+  // and the last two groups perhaps written as IPv4 (::ffff:1.2.3.4).
+  val gap = text.indexOf("::")
+  if (gap >= 0 and text.indexOf("::", gap + 1) >= 0) { return null }
+  val before = gap < 0 ? text : text[0..<gap]
+  val after = gap < 0 ? "" : text[gap + 2..]
+  val head = before.isEmpty() ? [] : before.split(':')
+  val tail = after.isEmpty() ? [] : after.split(':')
+  val groups : open List<int> = []
+  val back : open List<int> = []
+  val last = gap < 0 ? head : tail
+  val ending = last.isEmpty() ? "" : last[last.size - 1]
+  val v4Ending = ending.indexOf('.') >= 0
+  for (k in 0..<head.size) {
+    if (gap < 0 and v4Ending and k == head.size - 1) { break }
+    val g = __ipGroupOf(head[k])
+    if (g < 0) { return null }
+    groups.add(g)
+  }
+  for (k in 0..<tail.size) {
+    if (v4Ending and k == tail.size - 1) { break }
+    val g = __ipGroupOf(tail[k])
+    if (g < 0) { return null }
+    back.add(g)
+  }
+  // An IPv4 ending: two groups.
+  if (v4Ending) {
+    val v4 = __ipv4Of(ending)
+    if (v4 < 0) { return null }
+    val into = gap < 0 ? groups : back
+    into.add(v4 >>> 16)
+    into.add(v4 & 0xFFFF)
+  }
+  val count = groups.size + back.size
+  if (gap < 0 ? count != 8 : count > 7) { return null }
+  while (groups.size + back.size < 8) { groups.add(0) }
+  groups.addAll(back)
+  val high = (groups[0] << 48) | (groups[1] << 32) | (groups[2] << 16) | groups[3]
+  val low = (groups[4] << 48) | (groups[5] << 32) | (groups[6] << 16) | groups[7]
+  return [high, low, 1]
+}
+
+// One IPv6 group, one to four hex digits, as a number; -1 where it is not one.
+fun __ipGroupOf(part : string) : int {
+  if (part.isEmpty() or part.size > 4) { return -1 }
+  var value = 0
+  for (c in part) {
+    val code = c.code
+    val digit = code >= 48 and code <= 57 ? code - 48 : code >= 97 and code <= 102 ? code - 87 : code >= 65 and code <= 70 ? code - 55 : -1
+    if (digit < 0) { return -1 }
+    value = value * 16 + digit
+  }
+  return value
+}
+
+// IPv4's dotted form, four numbers of 0 to 255 with no extra leading zeros, as a number; -1
+// where it is not that.
+fun __ipv4Of(text : string) : int {
+  var value = 0
+  var parts = 0
+  var digits = 0
+  var part = 0
+  for (c in text) {
+    if (c == '.') {
+      if (digits == 0 or parts == 3) { return -1 }
+      value = value * 256 + part
+      parts++
+      digits = 0
+      part = 0
+      continue
+    }
+    val code = c.code
+    if (code < 48 or code > 57) { return -1 }
+    if (digits > 0 and part == 0) { return -1 }   // a leading zero: "01" could be read as octal
+    part = part * 10 + code - 48
+    digits++
+    if (part > 255) { return -1 }
+  }
+  if (digits == 0 or parts != 3) { return -1 }
+  return value * 256 + part
+}
+
+// IPv4's dotted form of the number.
+fun __ipv4Text(v : int) : string => "${(v >>> 24) & 255}.${(v >>> 16) & 255}.${(v >>> 8) & 255}.${v & 255}"
+
+// An address's [high, low, family] from its 4 or 16 bytes; an IllegalArgumentException for any
+// other size.
+fun __ipFromBytes(b : Bytes) : List<int> {
+  if (b.size == 4) { return [0, b.uint32(0, true), 0] }
+  if (b.size == 16) { return [b.int64(0, true), b.int64(8, true), 1] }
+  throw IllegalArgumentException("an address is 4 bytes (IPv4) or 16 (IPv6), not ${b.size}")
+}

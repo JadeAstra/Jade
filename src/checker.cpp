@@ -3020,6 +3020,12 @@ struct Checker::Impl {
             {"ProcessBuilder", "a program is started with Process(command..., directory = ..., environment = {...}, input = ..., output = ..., error = ...) in WinterWolf, or run to its end with Process.run(...) (D91)"},
             {"Charsets", "a character set is a Charset in WinterWolf: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
             {"StandardCharsets", "a character set is a Charset in WinterWolf: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
+            // Addresses and datagrams (networking plan, part 1).
+            {"InetAddress", "an internet address is an IpAddress in WinterWolf, the number alone: IpAddress(\"1.2.3.4\"), IpAddress.loopback; a name is looked up with Dns.lookup(host) or Dns.lookupFirst(host) (networking plan, question 1)"},
+            {"Inet4Address", "an internet address is an IpAddress in WinterWolf, IPv4 or IPv6: IpAddress(\"1.2.3.4\"), address.isIpv4 (networking plan, question 1)"},
+            {"Inet6Address", "an internet address is an IpAddress in WinterWolf, IPv4 or IPv6: IpAddress(\"::1\"), address.isIpv6 (networking plan, question 1)"},
+            {"InetSocketAddress", "an address and a port are a SocketAddress in WinterWolf: SocketAddress(IpAddress.loopback, 53), SocketAddress(\"1.2.3.4\", 53); a name is looked up first with Dns.lookupFirst(host) (networking plan, question 1)"},
+            {"DatagramPacket", "a datagram is sent with udp.send(bytes, to) in WinterWolf, and udp.receive() gives a Datagram, its data and where it came from (networking plan, question 4)"},
             // Graphics (D99, D101 to D106, L79 to L86, L101, L102).
             {"Dimension", "a width and a height are a Size in WinterWolf, a value type: Size(width, height) (L82)"},
             {"Rectangle", "a rectangle is a Rect in WinterWolf, a value type: Rect(x, y, width, height) (L84)"},

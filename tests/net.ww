@@ -1,0 +1,252 @@
+// Addresses, names, datagrams and secure random numbers (networking plan, part 1): the standard
+// library's networking besides a TCP connection. Everything talks to this machine alone.
+
+// ---- IpAddress: the text read and written back ----
+val written = [
+  "0.0.0.0", "127.0.0.1", "192.168.1.10", "255.255.255.255",
+  "::", "::1", "2001:db8::1", "2001:DB8:0:0:0:0:0:1", "2001:db8:0:0:1:0:0:1", "fe80::",
+  "1:0:0:2:0:0:0:3", "1:2:3:4:5:6:7:8", "0:0:0:0:0:0:0:0", "::ffff:1.2.3.4", "::1.2.3.4",
+  "64:ff9b::192.0.2.33", "1::", "ff02::1:2", "2001:db8:0:1:1:1:1:1", "abcd:ef01::",
+]
+for (text in written) {
+  print(text, "->", IpAddress(text))
+}
+// expect: 0.0.0.0 -> 0.0.0.0
+// expect: 127.0.0.1 -> 127.0.0.1
+// expect: 192.168.1.10 -> 192.168.1.10
+// expect: 255.255.255.255 -> 255.255.255.255
+// expect: :: -> ::
+// expect: ::1 -> ::1
+// expect: 2001:db8::1 -> 2001:db8::1
+// expect: 2001:DB8:0:0:0:0:0:1 -> 2001:db8::1
+// expect: 2001:db8:0:0:1:0:0:1 -> 2001:db8::1:0:0:1
+// expect: fe80:: -> fe80::
+// expect: 1:0:0:2:0:0:0:3 -> 1:0:0:2::3
+// expect: 1:2:3:4:5:6:7:8 -> 1:2:3:4:5:6:7:8
+// expect: 0:0:0:0:0:0:0:0 -> ::
+// expect: ::ffff:1.2.3.4 -> ::ffff:1.2.3.4
+// expect: ::1.2.3.4 -> ::102:304
+// expect: 64:ff9b::192.0.2.33 -> 64:ff9b::c000:221
+// expect: 1:: -> 1::
+// expect: ff02::1:2 -> ff02::1:2
+// expect: 2001:db8:0:1:1:1:1:1 -> 2001:db8:0:1:1:1:1:1
+// expect: abcd:ef01:: -> abcd:ef01::
+
+// Not addresses: each gives null from parse, and an IllegalArgumentException from IpAddress().
+val wrong = [
+  "", "1.2.3", "1.2.3.4.5", "256.1.1.1", "01.2.3.4", "1.2.3.-4", "1..2.3", " 1.2.3.4", "a.b.c.d",
+  ":", ":::", "1:::2", "1::2::3", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "12345::", "g::",
+  ":1:2:3:4:5:6:7", "1:2:3:4:5:6:7:", "1:2:3:4:5:6:7::8", "fe80::1%eth0", "::1.2.3", "1.2.3.4::",
+  "example.org", "localhost",
+]
+var refused = 0
+for (text in wrong) {
+  try {
+    IpAddress(text)
+    print("taken:", text)
+  } catch (e : IllegalArgumentException) {
+    if (IpAddress.parse(text) == null) { refused++ }
+  }
+}
+print(refused == wrong.size)                                            // expect: true
+try { IpAddress("example.org") } catch (e : IllegalArgumentException) { print(e.message) }
+// expect: 'example.org' is not an IPv4 or IPv6 address (a name is looked up with Dns.lookup)
+
+// ---- What an address is ----
+fun kinds(text : string) : string {
+  val a = IpAddress(text)
+  val said : open List<string> = []
+  if (a.isIpv4) { said.add("v4") }
+  if (a.isIpv6) { said.add("v6") }
+  if (a.isLoopback) { said.add("loopback") }
+  if (a.isAny) { said.add("any") }
+  if (a.isLinkLocal) { said.add("link") }
+  if (a.isPrivate) { said.add("private") }
+  if (a.isMulticast) { said.add("multicast") }
+  return "$text: " + said.join(" ")
+}
+for (text in ["127.0.0.1", "127.255.0.9", "0.0.0.0", "10.1.2.3", "172.16.0.1", "172.31.255.255", "172.32.0.1",
+              "192.168.0.1", "169.254.3.4", "224.0.0.251", "239.1.1.1", "8.8.8.8",
+              "::1", "::", "fe80::1", "febf::1", "fec0::1", "fc00::1", "fdff::1", "fe00::1", "ff02::fb", "2606:4700::1111"]) {
+  print(kinds(text))
+}
+// expect: 127.0.0.1: v4 loopback
+// expect: 127.255.0.9: v4 loopback
+// expect: 0.0.0.0: v4 any
+// expect: 10.1.2.3: v4 private
+// expect: 172.16.0.1: v4 private
+// expect: 172.31.255.255: v4 private
+// expect: 172.32.0.1: v4
+// expect: 192.168.0.1: v4 private
+// expect: 169.254.3.4: v4 link
+// expect: 224.0.0.251: v4 multicast
+// expect: 239.1.1.1: v4 multicast
+// expect: 8.8.8.8: v4
+// expect: ::1: v6 loopback
+// expect: ::: v6 any
+// expect: fe80::1: v6 link
+// expect: febf::1: v6 link
+// expect: fec0::1: v6
+// expect: fc00::1: v6 private
+// expect: fdff::1: v6 private
+// expect: fe00::1: v6
+// expect: ff02::fb: v6 multicast
+// expect: 2606:4700::1111: v6
+
+// Its bytes, and back.
+print(IpAddress("192.168.1.10").bytes.toList(), IpAddress("::1").bytes.size)   // expect: [192, 168, 1, 10] 16
+print(IpAddress(Bytes([10, 0, 0, 1])), IpAddress(IpAddress("2001:db8::ff00:42:8329").bytes))   // expect: 10.0.0.1 2001:db8::ff00:42:8329
+try { IpAddress(Bytes(5)) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: an address is 4 bytes (IPv4) or 16 (IPv6), not 5
+// Equal addresses are one key; IPv4 and IPv6 differ even where the bits agree.
+val seen = setOf(IpAddress("::1"), IpAddress("0:0:0:0:0:0:0:1"), IpAddress.loopback6, IpAddress("0.0.0.1"))
+print(seen.size, IpAddress("10.0.0.1") == IpAddress("10.0.0.1"), IpAddress("::") == IpAddress.any)   // expect: 2 true false
+print(IpAddress.loopback, IpAddress.loopback6, IpAddress.any, IpAddress.any6)   // expect: 127.0.0.1 ::1 0.0.0.0 ::
+
+// ---- SocketAddress ----
+val at = SocketAddress("127.0.0.1", 53)
+print(at, at.address.isLoopback, at.port, SocketAddress(IpAddress("2001:db8::1"), 443))   // expect: 127.0.0.1:53 true 53 [2001:db8::1]:443
+print(at == SocketAddress(IpAddress.loopback, 53), at == SocketAddress(IpAddress.loopback, 54))   // expect: true false
+for (text in ["1.2.3.4:80", "[::1]:8080", "[::ffff:1.2.3.4]:0", "1.2.3.4:65535", "1.2.3.4:65536", "::1:80", "[1.2.3.4]:80",
+              "1.2.3.4", "1.2.3.4:", ":80", "1.2.3.4:+80", "1.2.3.4:-1", "[::1:80", "host:80"]) {
+  print(text, "->", SocketAddress.parse(text))
+}
+// expect: 1.2.3.4:80 -> 1.2.3.4:80
+// expect: [::1]:8080 -> [::1]:8080
+// expect: [::ffff:1.2.3.4]:0 -> [::ffff:1.2.3.4]:0
+// expect: 1.2.3.4:65535 -> 1.2.3.4:65535
+// expect: 1.2.3.4:65536 -> null
+// expect: ::1:80 -> null
+// expect: [1.2.3.4]:80 -> null
+// expect: 1.2.3.4 -> null
+// expect: 1.2.3.4: -> null
+// expect: :80 -> null
+// expect: 1.2.3.4:+80 -> null
+// expect: 1.2.3.4:-1 -> null
+// expect: [::1:80 -> null
+// expect: host:80 -> null
+try { SocketAddress(IpAddress.loopback, 70000) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a port is from 0 to 65535, not 70000
+
+// ---- Dns ----
+val local = Dns.lookup("localhost")
+print(local.size > 0, local.all { it.isLoopback })                       // expect: true true
+print(Dns.lookup("10.1.2.3"), Dns.lookupFirst("::1"))                     // expect: [10.1.2.3] ::1
+try { Dns.lookup("no-such-host.invalid") } catch (e : UnknownHostException) { print(e.message, e is IOException) }
+// expect: cannot find host 'no-such-host.invalid' true
+try { Socket("no-such-host.invalid", 80) } catch (e : UnknownHostException) { print(e.message) }
+// expect: cannot find host 'no-such-host.invalid'
+print(Dns.localHostName.size > 0)                                         // expect: true
+val back = Dns.reverse(IpAddress.loopback)                                // whatever this machine calls itself, or null
+print(back == null or back!!.size > 0)                                    // expect: true
+
+// ---- Datagrams over IPv4 ----
+val server = DatagramSocket(0, IpAddress.loopback)
+val client = DatagramSocket(bindAddress = IpAddress.loopback)
+print(server.localPort > 0, server.localAddress, client.localAddress)    // expect: true 127.0.0.1 127.0.0.1
+client.send("ping".toBytes(), SocketAddress(IpAddress.loopback, server.localPort))
+val query = server.receive()
+print(query.data.decodeToString(), query.from.address, query.from.port == client.localPort)   // expect: ping 127.0.0.1 true
+server.send("pong!".toBytes(), query.from, offset = 1, size = 3)
+print(client.receive().data.decodeToString())                            // expect: ong
+// A datagram longer than asked for is cut, the rest lost; an empty one is a datagram too.
+client.send(Bytes([1, 2, 3, 4, 5, 6]), SocketAddress(IpAddress.loopback, server.localPort))
+print(server.receive(maxSize = 4).data.toList())                         // expect: [1, 2, 3, 4]
+client.send(Bytes(0), SocketAddress(IpAddress.loopback, server.localPort))
+print(server.receive().data.size)                                        // expect: 0
+// One sent to a port no one listens at is lost, and says nothing, here or at the next receive.
+val nobody = DatagramSocket(bindAddress = IpAddress.loopback)
+val emptyPort = nobody.localPort
+nobody.close()
+client.send("lost".toBytes(), SocketAddress(IpAddress.loopback, emptyPort))
+client.send("next".toBytes(), SocketAddress(IpAddress.loopback, server.localPort))
+print(server.receive().data.decodeToString())                            // expect: next
+// An IPv4 socket cannot reach IPv6.
+try { client.send(Bytes(1), SocketAddress(IpAddress.loopback6, 9)) } catch (e : IOException) { print(e.message) }
+// expect: a datagram socket at an IPv4 address cannot send to an IPv6 one (::1)
+try { client.send(Bytes(2), SocketAddress(IpAddress.loopback, 9), offset = 1, size = 2) } catch (e : IndexOutOfBoundsException) { print(e.message) }
+// expect: 2 bytes from 1 do not fit in bytes of size 2
+// A receive that waits too long gives up.
+server.readTimeout = 30.milliseconds
+try { server.receive() } catch (e : SocketTimeoutException) { print(e.message, e is IOException, server.readTimeout) }   // expect: the read timed out true 30ms
+server.readTimeout = null
+// Closing a socket that a thread is waiting on gets the thread out.
+var receiveError : string? = null
+val waiting = thread { try { server.receive() } catch (e : IOException) { receiveError = e.message } }
+Thread.sleep(30.milliseconds)
+server.close()
+waiting.get()
+print(receiveError, server.isClosed)                                     // expect: the socket is closed true
+try { server.receive() } catch (e : IOException) { print(e.message) }    // expect: the socket is closed
+client.close()
+
+// ---- Datagrams over IPv6, and a socket taking both ----
+DatagramSocket(0, IpAddress.loopback6).use { six ->
+  DatagramSocket().use { both ->                     // no address: IPv4 and IPv6
+    print(both.localAddress)                                             // expect: ::
+    both.send("over six".toBytes(), SocketAddress(IpAddress.loopback6, six.localPort))
+    val got = six.receive()
+    print(got.data.decodeToString(), got.from.address, got.from.port == both.localPort)   // expect: over six ::1 true
+    six.send("back".toBytes(), got.from)
+    print(both.receive().data.decodeToString())                          // expect: back
+    // IPv4 into the socket of both kinds: the sender is given as IPv4.
+    DatagramSocket(0, IpAddress.loopback).use { four ->
+      four.send("over four".toBytes(), SocketAddress(IpAddress.loopback, both.localPort))
+      val came = both.receive()
+      print(came.data.decodeToString(), came.from.address, came.from.address.isIpv4)   // expect: over four 127.0.0.1 true
+      both.send("answer".toBytes(), came.from)
+      print(four.receive().data.decodeToString())                        // expect: answer
+    }
+  }
+}
+try { DatagramSocket(0, "example.org") } catch (e : IOException) { print(e.message) }   // expect: 'example.org' is not an address for a datagram socket
+try { DatagramSocket(70000) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a port is from 0 to 65535, not 70000
+
+// ---- TCP over IPv6, and listening on both ----
+val listener = ServerSocket(0)                        // no address: IPv4 and IPv6
+val answering = thread {
+  for (i in 0..<2) {
+    listener.accept().use { c ->
+      c.writer.println("hello ${c.remoteAddress}")
+    }
+  }
+}
+Socket(SocketAddress(IpAddress.loopback6, listener.localPort)).use { print(it.reader.readLine(), it.remoteAddress) }   // expect: hello ::1 ::1
+Socket("127.0.0.1", listener.localPort).use { print(it.reader.readLine()) }   // expect: hello 127.0.0.1
+answering.get()
+listener.close()
+ServerSocket(0, bindAddress = IpAddress.loopback6).use { only6 ->
+  val one = thread { only6.accept().use { it.writer.println("six only") } }
+  Socket().connect(SocketAddress(IpAddress.loopback6, only6.localPort), 2.seconds).use { print(it.reader.readLine()) }   // expect: six only
+  one.get()
+  try { Socket().connect("127.0.0.1", only6.localPort, 300.milliseconds) } catch (e : IOException) { print("not over four") }   // expect: not over four
+}
+
+// ---- SecureRandom ----
+val noise = SecureRandom.bytes(4096)
+var distinct = 0
+val hits : open List<int> = []
+for (i in 0..<256) { hits.add(0) }
+for (b in noise.toList()) { hits[b.toInt()] = hits[b.toInt()] + 1 }
+for (h in hits) { if (h > 0) { distinct++ } }
+// 4096 bytes: each value expected 16 times; all 256 seen, none wildly often.
+print(noise.size, distinct == 256, hits.max() < 48)                       // expect: 4096 true true
+print(SecureRandom.bytes(0).size, SecureRandom.bytes(32) != SecureRandom.bytes(32))   // expect: 0 true
+val buffer = Bytes(8)
+SecureRandom.fill(buffer, 2, 4)
+print(buffer[0], buffer[1], buffer[6], buffer[7])                        // expect: 0 0 0 0
+var low = 0
+var high = 0
+for (i in 0..<400) {
+  val r = SecureRandom.randomInt(-1, 1)
+  if (r < -1 or r > 1) { print("out of range:", r) }
+  if (r == -1) { low++ }
+  if (r == 1) { high++ }
+}
+print(low > 50, high > 50, SecureRandom.randomInt(7, 7))                  // expect: true true 7
+SecureRandom.randomInt(int.minValue, int.maxValue)                                  // the whole range, no error
+val f = SecureRandom.random()
+print(f >= 0.0 and f < 1.0)                                               // expect: true
+try { SecureRandom.randomInt(3, 2) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: randomInt's low (3) is above its high (2)
+try { SecureRandom.bytes(-1) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a size is 0 or more, not -1
+// From many threads at once.
+val jobs = (0..<8).map { thread { SecureRandom.bytes(64).size } }
+print(jobs.map { it.get() }.sum())                                        // expect: 512

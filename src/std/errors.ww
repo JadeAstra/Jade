@@ -138,6 +138,9 @@ class IOException(message : string? = null, cause : Throwable? = null) : Excepti
 class DataFormatException(message : string? = null, cause : Throwable? = null) : Exception(message, cause)
 // A socket's read that waited longer than its readTimeout (D120), an IOException as in Java.
 class SocketTimeoutException(message : string? = "the read timed out") : IOException(message)
+// A name the system's resolver could not find (Dns.lookup, a Socket given a host), an
+// IOException as in Java.
+class UnknownHostException(message : string? = "the host was not found") : IOException(message)
 // An IOException where nothing checked can be thrown: a line read lazily by a sequence. `cause`
 // is the IOException, as in Java.
 class UncheckedIOException(cause : IOException) : RuntimeException(cause.message, cause)
