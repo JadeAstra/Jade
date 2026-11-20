@@ -400,8 +400,8 @@ pre code { background: none; padding: 0; }
 
 <section class="item" id="o-objects-plan">
 <h3>Programs of objects at speed: the plan</h3>
-<p class="status"><span class="label">Recommended</span> Five questions</p>
-<p>At the user's word (2026-11-20: "write a plan for these", the six ww changes toww's agent suggested as toww ran 45 times slower than its Kotlin): <a href="objects-plan.html">objects-plan.html</a>. Measured first: a call of a method that overrides another, or through an interface, is never put in place and costs 12 ns; native code reads a global's field and a chain's second field more slowly than the VM (10 to 11 ns against 5); an object costs 31 to 41 ns to make; native code gives toww nothing today. Four parts now (field reads in native code, overridden methods put in place behind a check, a call made cheaper, objects from blocks of a size), a fifth after the emitter, and what toww can change itself. Waiting on its five questions.</p>
+<p class="status"><span class="label">Recommended</span> Four questions left</p>
+<p>At the user's word (2026-11-20: "write a plan for these", the six ww changes toww's agent suggested as toww ran 45 times slower than its Kotlin): <a href="objects-plan.html">objects-plan.html</a>. Measured first: a call of a method that overrides another, or through an interface, is never put in place and costs 12 ns; native code reads a global's field and a chain's second field more slowly than the VM (10 to 11 ns against 5); an object costs 31 to 41 ns to make; native code gives toww nothing today. Four parts now (field reads in native code, overridden methods put in place behind a check, a call made cheaper, objects from blocks of a size), a fifth after the emitter, and what toww can change itself. Q4 decided (the user passed toww's list to its agent); waiting on Q1, Q2, Q3 and Q5.</p>
 </section>
 
 <section class="item" id="o-networking">

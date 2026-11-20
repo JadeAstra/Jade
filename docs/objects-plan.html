@@ -62,6 +62,9 @@ section.decision {
 .label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .verdict .label { color: var(--decide); white-space: nowrap; }
 .verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
 .table { overflow-x: auto; margin: 4px 0 18px; }
 table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
 th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
@@ -240,7 +243,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <h3><span class="code">Q4</span>What toww can do itself</h3>
 <p>Whether the list in <a href="#op-toww">What toww can do itself</a> goes to toww's agent (the user passes it on), is written into toww's <code>docs/design.html</code> by a session in that repository, or is left until ww's parts are done.</p>
 <p class="rec">Recommended: passed to toww's agent now; the self-modifying-code check alone is worth more than any one part here.</p>
-<div class="verdict"><span class="label">Your call</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">Passed on (the user, 2026-11-20: "for Q4, I told the agent your suggestions").</span></div>
 </section>
 
 <section class="decision">
