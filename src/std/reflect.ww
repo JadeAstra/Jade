@@ -5,6 +5,10 @@
 // them (D38): what a class keeps private is listed only to that class's own code. A member
 // listed is read, set or called by its name, through what lists it.
 //
+// In a generic function or class, `T#` is the class of the type argument T was given:
+//
+//   fun <T> make() : T => T#.constructors[0].call() as T
+//
 // What a method or constructor called this way throws arrives wrapped in a checked
 // InvocationTargetException, the original in `cause` (D49). A call the member cannot take, as
 // one with too few arguments or of the wrong types, or on an object of another class, is an
@@ -24,6 +28,12 @@ external fun __typeStaticMethods(type : Type, asker : any?) : List<List<any?>>
 external fun __typeClass(type : Type) : any
 external fun __typeAnnotations(type : Type) : List<any>
 external fun __typeKinds(type : Type) : List<Type>
+external fun __typeIsData(type : Type) : bool
+external fun __typeNewList(type : Type) : open List<any?>
+external fun __typeNewSet(type : Type) : open Set<any?>
+external fun __typeNewMap(type : Type) : open Map<any?, any?>
+external fun __typeConstructBy(type : Type, form : string?, args : List<any?>, given : List<bool>) : any
+external fun __typeEntries(type : Type) : List<any>
 external fun __typeConstruct(type : Type, args : List<any?>) : any
 external fun __memberGet(obj : any, name : string) : any?
 external fun __memberSet(obj : any, name : string, value : any?)
@@ -67,6 +77,15 @@ class Class(internal val type : Type, internal val asker : any? = null) {
   // The kinds of an enum class (D39), in the order they are written: none for any other.
   val kinds : List<Class>
     get() => __typeKinds(type).map { Class(it, asker) }
+
+  // Whether it is a data class: compared, printed and taken apart by the fields in its header.
+  val isData : bool
+    get() => __typeIsData(type)
+
+  // An enum's entries, in the order they are written, as Name.entries gives them: none for any
+  // other class.
+  val entries : List<any>
+    get() => __typeEntries(type)
 
   // Its fields and properties, those of the classes above it first: each one the code that
   // wrote the `#` may use.
@@ -272,6 +291,31 @@ class Constructor(val owner : Class, entry : List<any?>) {
     try {
       if (form != null) { return __memberCall(__typeClass(owner.type), form, args) as any }
       return __typeConstruct(owner.type, args)
+    } catch (e) {
+      throw InvocationTargetException(e)
+    }
+  }
+
+  // A new object of the class made from `arguments` by the parameters' names, each one left
+  // out given its default, as a call by name is: Point#.constructors[0].callBy({"y": 2}). An
+  // IllegalArgumentException for a name it has no parameter of, a value of the wrong type, or
+  // a parameter left out that has no default.
+  fun callBy(arguments : Map<string, any?>) : any throws InvocationTargetException {
+    for (name in arguments.keys) {
+      require(parameters.any { it.name == name }) { "${owner.name} has no parameter named $name" }
+    }
+    val values : open List<any?> = []
+    val given : open List<bool> = []
+    for (p in parameters) {
+      val has = p.name in arguments.keys
+      require(has or p.isOptional) { "${owner.name}: ${p.name} is not given and has no default" }
+      val value = has ? arguments[p.name] : null
+      if (has) { require(__typeHas(p.rawType, value)) { "${owner.name}: ${p.name} is ${p.type}, which $value is not" } }
+      values.add(value)
+      given.add(has)
+    }
+    try {
+      return __typeConstructBy(owner.type, form, values, given)
     } catch (e) {
       throw InvocationTargetException(e)
     }

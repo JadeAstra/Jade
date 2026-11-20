@@ -181,7 +181,40 @@ bool parseInt(std::string_view s, int64_t& out) {
 bool parseFloat(std::string_view s, double& out) {
     if (!s.empty() && s[0] == '+') s.remove_prefix(1);
     auto res = std::from_chars(s.data(), s.data() + s.size(), out);
-    return !s.empty() && res.ec == std::errc() && res.ptr == s.data() + s.size();
+    if (s.empty() || res.ptr != s.data() + s.size()) return false;
+    if (res.ec == std::errc()) return true;
+    if (res.ec != std::errc::result_out_of_range) return false;
+    // Too large or too small for a float, as Kotlin's, Java's and Python's give it: infinity
+    // past the largest, zero below the smallest, with the sign written. Which of the two is
+    // where the first digit that is not 0 stands, its power of ten, moved by the exponent.
+    const bool negative = s[0] == '-';
+    size_t i = negative ? 1 : 0;
+    long long before = 0;  // digits before the point, from the first that is not 0
+    long long zeros = 0;   // where none is before it: the 0s after the point before the first that is not
+    bool seen = false, afterPoint = false;
+    for (; i < s.size() && s[i] != 'e' && s[i] != 'E'; i++) {
+        if (s[i] == '.') {
+            afterPoint = true;
+        } else if (!afterPoint) {
+            if (s[i] != '0') seen = true;
+            if (seen) before++;
+        } else if (!seen) {
+            if (s[i] != '0') seen = true;
+            else zeros++;
+        }
+    }
+    const long long place = before > 0 ? before - 1 : -(zeros + 1);
+    long long exponent = 0;
+    if (i < s.size()) {
+        int64_t e = 0;
+        std::string_view digits = s.substr(i + 1);
+        if (!digits.empty() && digits[0] == '+') digits.remove_prefix(1);
+        auto er = std::from_chars(digits.data(), digits.data() + digits.size(), e);
+        exponent = er.ec == std::errc() ? e : (!digits.empty() && digits[0] == '-' ? -1000000 : 1000000);
+    }
+    const double magnitude = place + exponent > 0 ? std::numeric_limits<double>::infinity() : 0.0;  // out of range: past one end or the other
+    out = negative ? -magnitude : magnitude;
+    return true;
 }
 
 int64_t floatToInt(VM& vm, double d) {

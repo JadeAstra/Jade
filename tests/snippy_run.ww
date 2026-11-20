@@ -27,8 +27,13 @@ if (command.size < 2) {
 } else {
   val ww = command[0]
   val folder = FilePath("snippy_programs/run")
-  val programs = folder.list().filter { (it.name.endsWith(".py") or it.name.endsWith(".snippy")) and !it.name.startsWith("_") }
-                     .sortedBy { it.name }
+  val every = folder.list().filter { (it.name.endsWith(".py") or it.name.endsWith(".snippy")) and !it.name.startsWith("_") }
+                  .sortedBy { it.name }
+  // Quick (WW_TEST_QUICK=1, under GC stress, where each program's ww is stressed too): every
+  // third program, the same ones each time; all of them otherwise. All 61 under GC stress take
+  // some 590 s alone, at the 600 s limit (2026-11-20).
+  val quick = Program.environment["WW_TEST_QUICK"] == "1"
+  val programs = quick ? every.indices.filter { it % 3 == 0 }.map { every[it] } : every
   val differ : open List<string> = []
   for p in programs {
     val run = Process.run([ww, p.name], directory = folder)
@@ -46,7 +51,7 @@ if (command.size < 2) {
     print("snippy programs: ${differ.size} of ${programs.size} differ")
     for d in differ { print("  " + d) }
   }
-  print(programs.size >= 60)
+  print(every.size >= 60)   // all of them found, whichever ran
 }
 // expect: snippy programs: all as CPython's
 // expect: true

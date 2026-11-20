@@ -430,6 +430,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-image-ww">image.ww</a></li>
 <li><a href="#file-io-ww">io.ww</a></li>
 <li><a href="#file-jpeg-ww">jpeg.ww</a></li>
+<li><a href="#file-json-ww">json.ww</a></li>
 <li><a href="#file-list-ww">list.ww</a></li>
 <li><a href="#file-localtime-ww">localtime.ww</a></li>
 <li><a href="#file-map-ww">map.ww</a></li>
@@ -486,7 +487,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ChangeKind"><code>ChangeKind</code></a> (1)</li>
 <li><a href="#Channel"><code>Channel</code></a> (10)</li>
 <li><a href="#Charset"><code>Charset</code></a> (1)</li>
-<li><a href="#Class"><code>Class</code></a> (23)</li>
+<li><a href="#Class"><code>Class</code></a> (25)</li>
 <li><a href="#ClassCastException"><code>ClassCastException</code></a> (1)</li>
 <li><a href="#Color"><code>Color</code></a> (24)</li>
 <li><a href="#ColorLookup"><code>ColorLookup</code></a> (1)</li>
@@ -494,7 +495,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Complex"><code>Complex</code></a> (47)</li>
 <li><a href="#Composite"><code>Composite</code></a> (1)</li>
 <li><a href="#ConcurrentModificationException"><code>ConcurrentModificationException</code></a> (1)</li>
-<li><a href="#Constructor"><code>Constructor</code></a> (6)</li>
+<li><a href="#Constructor"><code>Constructor</code></a> (7)</li>
 <li><a href="#Countdown"><code>Countdown</code></a> (4)</li>
 <li><a href="#CycleMethod"><code>CycleMethod</code></a> (1)</li>
 <li><a href="#DataFormatException"><code>DataFormatException</code></a> (1)</li>
@@ -543,6 +544,25 @@ addButton(widgets)</pre></dd>
 <li><a href="#Iterator"><code>Iterator</code></a> (3)</li>
 <li><a href="#Job"><code>Job</code></a> (15)</li>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
+<li><a href="#Json"><code>Json</code></a> (4)</li>
+<li><a href="#JsonArray"><code>JsonArray</code></a> (3)</li>
+<li><a href="#JsonBigInt"><code>JsonBigInt</code></a> (2)</li>
+<li><a href="#JsonBool"><code>JsonBool</code></a> (2)</li>
+<li><a href="#JsonDiff"><code>JsonDiff</code></a> (1)</li>
+<li><a href="#JsonDiff.MissingInNew"><code>JsonDiff.MissingInNew</code></a> (1)</li>
+<li><a href="#JsonDiff.MissingInOld"><code>JsonDiff.MissingInOld</code></a> (1)</li>
+<li><a href="#JsonDiff.ValueChanged"><code>JsonDiff.ValueChanged</code></a> (1)</li>
+<li><a href="#JsonDouble"><code>JsonDouble</code></a> (2)</li>
+<li><a href="#JsonField"><code>JsonField</code></a> (1)</li>
+<li><a href="#JsonInt"><code>JsonInt</code></a> (2)</li>
+<li><a href="#JsonNode"><code>JsonNode</code></a> (10)</li>
+<li><a href="#JsonNodeFactory"><code>JsonNodeFactory</code></a> (3)</li>
+<li><a href="#JsonNull"><code>JsonNull</code></a> (2)</li>
+<li><a href="#JsonObject"><code>JsonObject</code></a> (16)</li>
+<li><a href="#JsonParseException"><code>JsonParseException</code></a> (1)</li>
+<li><a href="#JsonRead"><code>JsonRead</code></a> (1)</li>
+<li><a href="#JsonString"><code>JsonString</code></a> (2)</li>
+<li><a href="#JsonValue"><code>JsonValue</code></a> (12)</li>
 <li><a href="#Library"><code>Library</code></a> (4)</li>
 <li><a href="#Limits"><code>Limits</code></a> (1)</li>
 <li><a href="#Line"><code>Line</code></a> (4)</li>
@@ -4205,6 +4225,267 @@ val local = ServerSocket(FilePath(&quot;/run/app.sock&quot;))   // for programs 
 <h3>JPEG</h3>
 <h3>Writing</h3>
 </section>
+<section class="file" id="file-json-ww">
+<h2>json.ww</h2>
+<h3>JSON</h3>
+<div class="entry" id="Json"><code class="sig">object Json</code><a class="anchor" href="#Json">#</a>
+<p>JSON read and written (RFC 8259), the way Python's json module reads and writes it, and a tree of JSON values to build and look through (JadeLib's).</p>
+<pre>val config = Json.read(text) as Map&lt;string, any?&gt;        // plain values
+val p = Json.read&lt;Point&gt;(&quot;{\&quot;x\&quot;: 1, \&quot;y\&quot;: 2}&quot;)          // a data class, made from it
+print(Json.write(p, indent = 2))
+val tree = toJsonVal(text)                               // a JsonValue tree
+print(tree[&quot;items&quot;]?[0]?.toInt())
+</pre>
+<p>Reading takes what Python's does and gives what it gives: whole numbers of any size (a BigInt past an int), NaN, Infinity and -Infinity, the last of two keys of one name, and nothing after the value but spaces, tabs and line ends. Text that is not JSON is a JsonParseException saying what was expected and where, in Python's words: &quot;Expecting ',' delimiter: line 3 column 7 (char 41)&quot;. A \u escape of half a pair of UTF-16 surrogates with no other half reads as U+FFFD, which a string can hold where half a pair it cannot.</p>
+<p>Writing gives what Python's does, its options with theirs: floats in Python's form (&quot;1e-05&quot;, &quot;1e+16&quot;, &quot;0.1&quot;), every character past ASCII as a \u escape unless ensureAscii is false, and an error for a value JSON has no form of, unless <code>default</code> makes it one.</p>
+<p>A data class is read and written as an object of the fields in its header, in their order, each by its name; an enum's entry by its name, as a string. @JsonField on a field gives it another key, or leaves it out.</p>
+<pre>data Row(@JsonField(&quot;row_id&quot;) val id : int, val label : string, @JsonField(skip = true) val cache : int = 0)
+</pre>
+</div>
+<div class="entry member" id="Json.read"><code class="sig">fun &lt;T&gt; read(text : string, strict : bool = true, objectHook : ((Map&lt;string, any?&gt;) -&gt; any?)? = null, objectPairsHook : ((List&lt;MapEntry&lt;string, any?&gt;&gt;) -&gt; any?)? = null, parseFloat : ((string) -&gt; any?)? = null, parseInt : ((string) -&gt; any?)? = null, parseConstant : ((string) -&gt; any?)? = null) : T throws JsonParseException</code><a class="anchor" href="#Json.read">#</a>
+<p>The JSON value in <code>text</code>, as plain values: an object a Map&lt;string, any?&gt; with its keys in the order they come, an array a List&lt;any?&gt;, a string a string, a whole number an int (a BigInt past an int), any other number a float, true and false a bool, null null.</p>
+<p>Given a type, the value made into one: Json.read&lt;Point&gt;(text), Json.read&lt;List&lt;Point&gt;&gt;(text). A data class is made through its constructor from the object's keys, a key left out given the parameter's default; an enum's entry by its name; a list, a set or a map of anything that can be read; a JsonValue (Json.read&lt;JsonObject&gt;(text)) as toJsonVal gives it. A value that does not fit the type is a JsonParseException naming where it is, as &quot;$.points[2].x: a string where an int is wanted&quot;.</p>
+<p>The rest are Python's json.loads's, by the same names:</p>
+<pre>strict          false lets a string hold the control characters below 0x20 as they are
+objectHook      what each object is made into, given it as a map
+objectPairsHook the same, given its keys and values in order, duplicates and all
+parseFloat      what each number with a fraction or an exponent is made into, given its text
+parseInt        the same for each whole number
+parseConstant   the same for NaN, Infinity and -Infinity
+</pre>
+</div>
+<div class="entry member" id="Json.rawDecode"><code class="sig">fun rawDecode(text : string, at : int = 0, strict : bool = true) : JsonRead throws JsonParseException</code><a class="anchor" href="#Json.rawDecode">#</a>
+<p>The JSON value at <code>at</code> in <code>text</code>, and where it ends, with whatever follows it left: as Python's raw_decode, which takes no spaces before the value.</p>
+</div>
+<div class="entry member" id="Json.write"><code class="sig">fun write(value : any?, indent : (int | string)? = null, itemSeparator : string? = null, keySeparator : string = &quot;: &quot;, sortKeys : bool = false, ensureAscii : bool = true, allowNaN : bool = true, skipKeys : bool = false, checkCircular : bool = true, default : ((any?) -&gt; any?)? = null) : string</code><a class="anchor" href="#Json.write">#</a>
+<p><code>value</code> written as JSON. Plain values are written as Python writes them: null, a bool, an int or a BigInt, a float, a string (a char as one), a list as an array, a map as an object; and a JsonValue as itself, a JsonNode as its toJson(), a data class as an object of its header's fields, an enum's entry as its name.</p>
+<p>The rest are Python's json.dumps's, by the same names:</p>
+<pre>indent          null for all on one line; an int, that many spaces at each level, or a
+                string put there, each item on a line of its own
+itemSeparator   between items: &quot;, &quot; on one line, &quot;,&quot; with an indent
+keySeparator    between a key and its value: &quot;: &quot;
+sortKeys        each object's keys in order: strings by their characters, numbers by size
+ensureAscii     every character past ASCII as a \u escape (false: as it is)
+allowNaN        NaN and the infinities written as NaN, Infinity and -Infinity (false: an error)
+skipKeys        a map's key that is not a string, a number, a bool or null left out (false: an error)
+checkCircular   a list or map inside itself an error (false: not looked for)
+default         what a value JSON has no form of is written as instead
+</pre>
+<p>A value JSON has no form of, with no <code>default</code>, is an IllegalArgumentException.</p>
+</div>
+<div class="entry" id="JsonRead"><code class="sig">data JsonRead(val value : any?, val end : int)</code><a class="anchor" href="#JsonRead">#</a>
+<p>What Json.rawDecode gives: the value read, and where in the text it ended.</p>
+</div>
+<div class="entry" id="JsonParseException"><code class="sig">class JsonParseException(val description : string, val position : int = -1, val line : int = 0, val column : int = 0, message : string = description) : IllegalStateException(message)</code><a class="anchor" href="#JsonParseException">#</a>
+<p>Text that is not JSON, or a value that does not fit the type it was read as. <code>description</code> is what was wrong, as &quot;Expecting value&quot;; <code>position</code> the character it was found at, counted from 0, and <code>line</code> and <code>column</code> where that is, each counted from 1 (-1 and 0 for a value that does not fit). The message is all of them: &quot;Expecting value: line 1 column 5 (char 4)&quot;; JsonParseException(message) alone is one with nothing more to say.</p>
+</div>
+<div class="entry" id="JsonField"><code class="sig">annotation JsonField(val name : string = &quot;&quot;, val skip : bool = false)</code><a class="anchor" href="#JsonField">#</a>
+<p>On a data class's field: the key it is read and written by, in place of its name, or (skip = true) left out of JSON altogether, read as its default.</p>
+</div>
+<h3>The tree (JadeLib's)</h3>
+<div class="entry" id="JsonValue"><code class="sig">abstract class JsonValue</code><a class="anchor" href="#JsonValue">#</a>
+<p>A JSON value: a JsonObject, JsonArray, JsonString, JsonInt (JsonBigInt past an int), JsonDouble, JsonBool or JsonNull. Made by toJsonVal and toJsonObj, or built with JsonObject's []=, and written by toJsonText. A whole number and one with a fraction are different values, so 1 and 1.0 are not equal and diffJson tells them apart.</p>
+</div>
+<div class="entry member" id="JsonValue.toFloat"><code class="sig">fun toFloat() : float</code><a class="anchor" href="#JsonValue.toFloat">#</a>
+<p>As a float: a number's value, or a string's read as one; a NumberFormatException for anything else.</p>
+</div>
+<div class="entry member" id="JsonValue.toInt"><code class="sig">fun toInt() : int</code><a class="anchor" href="#JsonValue.toInt">#</a>
+<p>As an int: a number's value (a fraction cut off), or a string's read as one; a NumberFormatException for anything else.</p>
+</div>
+<div class="entry member" id="JsonValue.stringValue"><code class="sig">fun stringValue() : string</code><a class="anchor" href="#JsonValue.stringValue">#</a>
+<p>A string's text; an IllegalStateException for anything else.</p>
+</div>
+<div class="entry member" id="JsonValue.[]"><code class="sig">op [](key : string) : JsonValue?</code><a class="anchor" href="#JsonValue.[]">#</a>
+<p>An object's value for <code>key</code>; null where it has none, or for anything but an object.</p>
+</div>
+<div class="entry member" id="JsonValue.[]-2"><code class="sig">op [](index : int) : JsonValue?</code><a class="anchor" href="#JsonValue.[]-2">#</a>
+<p>An array's item at <code>index</code>; null past its end, or for anything but an array.</p>
+</div>
+<div class="entry member" id="JsonValue.toBool"><code class="sig">fun toBool() : bool?</code><a class="anchor" href="#JsonValue.toBool">#</a>
+<p>A bool's value; null for anything else.</p>
+</div>
+<div class="entry member" id="JsonValue.toFloatArray"><code class="sig">fun toFloatArray() : List&lt;float&gt;?</code><a class="anchor" href="#JsonValue.toFloatArray">#</a>
+<p>An array's items as floats; null for anything but an array.</p>
+</div>
+<div class="entry member" id="JsonValue.toListFromIndexList"><code class="sig">fun &lt;T&gt; toListFromIndexList(sourceList : List&lt;T&gt;) : List&lt;T&gt;?</code><a class="anchor" href="#JsonValue.toListFromIndexList">#</a>
+<p>An array of indexes as the items of <code>sourceList</code> they point at, those past its end left out; null for anything but an array.</p>
+</div>
+<div class="entry member" id="JsonValue.asIntOrNull"><code class="sig">fun asIntOrNull() : int?</code><a class="anchor" href="#JsonValue.asIntOrNull">#</a>
+<p>A number as an int, as toInt() gives it; null for anything else.</p>
+</div>
+<div class="entry member" id="JsonValue.asDoubleOrNull"><code class="sig">fun asDoubleOrNull() : float?</code><a class="anchor" href="#JsonValue.asDoubleOrNull">#</a>
+<p>A number as a float; null for anything else.</p>
+</div>
+<div class="entry member" id="JsonValue.toJsonText"><code class="sig">fun toJsonText(prettyPrint : bool = true, level : int = 0, tab : string = &quot;    &quot;) : string</code><a class="anchor" href="#JsonValue.toJsonText">#</a>
+<p>Written as JSON text: with <code>prettyPrint</code> each item on a line of its own, <code>tab</code> once more at each level (starting at <code>level</code>), and &quot;: &quot; after each key; else all on one line, with nothing between the parts. Characters past ASCII are written as they are.</p>
+</div>
+<div class="entry" id="JsonObject"><code class="sig">data JsonObject(val map : open Map&lt;string, JsonValue&gt; = {:}, val keyOrder : open List&lt;string&gt; = []) : JsonValue()</code><a class="anchor" href="#JsonObject">#</a>
+<p>A JSON object: its keys and values in <code>map</code>, and in <code>keyOrder</code> the order it is written in.</p>
+</div>
+<div class="entry member" id="JsonObject.add"><code class="sig">fun add(key : string, value : JsonValue)</code><a class="anchor" href="#JsonObject.add">#</a>
+<p>Sets <code>key</code> to <code>value</code>, adding it to the end of keyOrder where it is new.</p>
+</div>
+<div class="entry member" id="JsonObject.[]="><code class="sig">op []=(key : string, value : float?)</code><a class="anchor" href="#JsonObject.[]=">#</a>
+<p>Sets <code>key</code> to a float; null takes the key out.</p>
+</div>
+<div class="entry member" id="JsonObject.[]=-2"><code class="sig">op []=(key : string, value : int?)</code><a class="anchor" href="#JsonObject.[]=-2">#</a>
+<p>Sets <code>key</code> to an int; null takes the key out.</p>
+</div>
+<div class="entry member" id="JsonObject.[]=-3"><code class="sig">op []=(key : string, value : string?)</code><a class="anchor" href="#JsonObject.[]=-3">#</a>
+<p>Sets <code>key</code> to a string; null takes the key out.</p>
+</div>
+<div class="entry member" id="JsonObject.[]=-4"><code class="sig">op []=(key : string, value : bool)</code><a class="anchor" href="#JsonObject.[]=-4">#</a>
+<p>Sets <code>key</code> to a bool.</p>
+</div>
+<div class="entry member" id="JsonObject.[]=-5"><code class="sig">op []=(key : string, value : nothing?)</code><a class="anchor" href="#JsonObject.[]=-5">#</a>
+<p>Sets <code>key</code> to JSON's null.</p>
+</div>
+<div class="entry member" id="JsonObject.[]=-6"><code class="sig">op []=(key : string, value : JsonValue?)</code><a class="anchor" href="#JsonObject.[]=-6">#</a>
+<p>Sets <code>key</code> to a JsonValue; null takes the key out.</p>
+</div>
+<div class="entry member" id="JsonObject.[]=-7"><code class="sig">op []=(key : string, value : any?)</code><a class="anchor" href="#JsonObject.[]=-7">#</a>
+<p>Sets <code>key</code> to anything jsonValueOf makes a JsonValue of.</p>
+</div>
+<div class="entry member" id="JsonObject.intValue"><code class="sig">fun intValue(key : string) : int</code><a class="anchor" href="#JsonObject.intValue">#</a>
+<p>The int at <code>key</code>; an IllegalStateException where there is none.</p>
+</div>
+<div class="entry member" id="JsonObject.intValue-2"><code class="sig">fun intValue(key : string, default : int) : int</code><a class="anchor" href="#JsonObject.intValue-2">#</a>
+<p>The int at <code>key</code>, or <code>default</code> where there is none or it is not a number.</p>
+</div>
+<div class="entry member" id="JsonObject.doubleValue"><code class="sig">fun doubleValue(key : string) : float</code><a class="anchor" href="#JsonObject.doubleValue">#</a>
+<p>The number at <code>key</code> as a float; an IllegalStateException where there is none.</p>
+</div>
+<div class="entry member" id="JsonObject.stringValue"><code class="sig">fun stringValue(key : string) : string</code><a class="anchor" href="#JsonObject.stringValue">#</a>
+<p>The string at <code>key</code>; a ClassCastException where it is not one.</p>
+</div>
+<div class="entry member" id="JsonObject.arrayValue"><code class="sig">fun arrayValue(key : string) : List&lt;JsonValue&gt;?</code><a class="anchor" href="#JsonObject.arrayValue">#</a>
+<p>The array at <code>key</code> as a new list; null where there is none.</p>
+</div>
+<div class="entry member" id="JsonObject.objectValue"><code class="sig">fun objectValue(key : string) : JsonObject</code><a class="anchor" href="#JsonObject.objectValue">#</a>
+<p>The object at <code>key</code>; a ClassCastException where it is not one.</p>
+</div>
+<div class="entry member" id="JsonObject.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonObject.toString">#</a>
+<p>Its keys and values, as {a:1,b:&quot;x&quot;}: for reading, not JSON (toJsonText writes that).</p>
+</div>
+<div class="entry" id="JsonArray"><code class="sig">data JsonArray(val list : List&lt;JsonValue&gt; = []) : JsonValue(), Iterable&lt;JsonValue&gt;</code><a class="anchor" href="#JsonArray">#</a>
+<p>A JSON array, gone through by a for as its items.</p>
+</div>
+<div class="entry member" id="JsonArray.iterator"><code class="sig">override fun iterator() : Iterator&lt;JsonValue&gt;</code><a class="anchor" href="#JsonArray.iterator">#</a>
+<p>Its items, in order.</p>
+</div>
+<div class="entry member" id="JsonArray.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonArray.toString">#</a>
+<p>Its items, as [1,&quot;x&quot;]: for reading, not JSON.</p>
+</div>
+<div class="entry" id="JsonString"><code class="sig">data JsonString(val value : string) : JsonValue()</code><a class="anchor" href="#JsonString">#</a>
+<p>A JSON string.</p>
+</div>
+<div class="entry member" id="JsonString.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonString.toString">#</a>
+<p>The text in quotes, as it is.</p>
+</div>
+<div class="entry" id="JsonInt"><code class="sig">data JsonInt(val value : int) : JsonValue()</code><a class="anchor" href="#JsonInt">#</a>
+<p>A JSON whole number that fits in an int.</p>
+</div>
+<div class="entry member" id="JsonInt.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonInt.toString">#</a>
+<p>The number.</p>
+</div>
+<div class="entry" id="JsonBigInt"><code class="sig">data JsonBigInt(val value : BigInt) : JsonValue()</code><a class="anchor" href="#JsonBigInt">#</a>
+<p>A JSON whole number past an int.</p>
+</div>
+<div class="entry member" id="JsonBigInt.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonBigInt.toString">#</a>
+<p>The number.</p>
+</div>
+<div class="entry" id="JsonDouble"><code class="sig">data JsonDouble(val value : float) : JsonValue()</code><a class="anchor" href="#JsonDouble">#</a>
+<p>A JSON number with a fraction or an exponent, or NaN or an infinity.</p>
+</div>
+<div class="entry member" id="JsonDouble.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonDouble.toString">#</a>
+<p>The number, as JSON writes it: &quot;1.0&quot;, &quot;1e-05&quot;.</p>
+</div>
+<div class="entry" id="JsonBool"><code class="sig">data JsonBool(val value : bool) : JsonValue()</code><a class="anchor" href="#JsonBool">#</a>
+<p>A JSON bool.</p>
+</div>
+<div class="entry member" id="JsonBool.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonBool.toString">#</a>
+<p>&quot;true&quot; or &quot;false&quot;.</p>
+</div>
+<div class="entry" id="JsonNull"><code class="sig">object JsonNull : JsonValue()</code><a class="anchor" href="#JsonNull">#</a>
+<p>JSON's null.</p>
+</div>
+<div class="entry member" id="JsonNull.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#JsonNull.toString">#</a>
+<p>&quot;null&quot;.</p>
+</div>
+<div class="entry" id="toJsonVal"><code class="sig">fun toJsonVal(jsonText : string) : JsonValue throws JsonParseException</code><a class="anchor" href="#toJsonVal">#</a>
+<p>The JsonValue in <code>jsonText</code>, read as Json.read reads it.</p>
+</div>
+<div class="entry" id="toJsonObj"><code class="sig">fun toJsonObj(jsonText : string) : JsonObject throws JsonParseException</code><a class="anchor" href="#toJsonObj">#</a>
+<p>The JsonObject in <code>jsonText</code>; a ClassCastException where the value is not an object.</p>
+</div>
+<div class="entry" id="toJsonText"><code class="sig">fun toJsonText(jsonStruct : JsonValue) : string</code><a class="anchor" href="#toJsonText">#</a>
+<p><code>jsonStruct</code> written as JSON text, as its toJsonText() writes it.</p>
+</div>
+<div class="entry" id="jsonValueOf"><code class="sig">fun jsonValueOf(value : any?) : JsonValue</code><a class="anchor" href="#jsonValueOf">#</a>
+<p>Anything as a JsonValue: a JsonValue as it is, a JsonNode as its toJson(), a data class as an object of its header's fields, an enum's entry as its name, null, a bool, a number or a string as one, a list or a set as an array of its items, a map as an object of the items whose keys are strings. An IllegalArgumentException for anything else.</p>
+</div>
+<div class="entry" id="JsonNode"><code class="sig">abstract class JsonNode</code><a class="anchor" href="#JsonNode">#</a>
+<p>A class written to and read from JSON by hand, with no reflection: it fills an object in toJson(value) and, where it is read back, reads one in fromJson(obj).</p>
+</div>
+<div class="entry member" id="JsonNode.toJson"><code class="sig">fun toJson() : JsonValue</code><a class="anchor" href="#JsonNode.toJson">#</a>
+<p>A new JsonObject that toJson(value) fills.</p>
+</div>
+<div class="entry member" id="JsonNode.fromJson"><code class="sig">fun fromJson(txt : string) throws JsonParseException</code><a class="anchor" href="#JsonNode.fromJson">#</a>
+<p><code>txt</code> read and given to fromJson(obj).</p>
+</div>
+<div class="entry member" id="JsonNode.toJson-2"><code class="sig">protected fun toJson(value : JsonObject)</code><a class="anchor" href="#JsonNode.toJson-2">#</a>
+<p>Puts what it holds in <code>value</code>: written by each class that is written.</p>
+</div>
+<div class="entry member" id="JsonNode.fromJson-2"><code class="sig">protected fun fromJson(obj : JsonValue)</code><a class="anchor" href="#JsonNode.fromJson-2">#</a>
+<p>Takes what it holds from <code>obj</code>: written by each class that is read.</p>
+</div>
+<div class="entry member" id="JsonNode.jsonList"><code class="sig">fun jsonList(nodeList : List&lt;JsonNode&gt;) : JsonArray</code><a class="anchor" href="#JsonNode.jsonList">#</a>
+<p>The nodes' toJson(), in an array.</p>
+</div>
+<div class="entry member" id="JsonNode.jsonList-2"><code class="sig">fun jsonList(intList : List&lt;int&gt;?) : JsonArray?</code><a class="anchor" href="#JsonNode.jsonList-2">#</a>
+<p>The ints in an array; null for null.</p>
+</div>
+<div class="entry member" id="JsonNode.jsonList-3"><code class="sig">fun jsonList(floatList : List&lt;float&gt;?) : JsonArray?</code><a class="anchor" href="#JsonNode.jsonList-3">#</a>
+<p>The floats in an array; null for null.</p>
+</div>
+<div class="entry member" id="JsonNode.jsonMap"><code class="sig">fun jsonMap(intMap : Map&lt;string, int&gt;?) : JsonObject?</code><a class="anchor" href="#JsonNode.jsonMap">#</a>
+<p>A map of ints as an object; null for null.</p>
+</div>
+<div class="entry member" id="JsonNode.jsonListByIndex"><code class="sig">fun &lt;T : JsonNode&gt; jsonListByIndex(dependantList : List&lt;T&gt;, sourceList : List&lt;T&gt;) : JsonArray</code><a class="anchor" href="#JsonNode.jsonListByIndex">#</a>
+<p>The places in <code>sourceList</code> of the items of <code>dependantList</code>, in an array, those not in it left out.</p>
+</div>
+<div class="entry" id="JsonNodeFactory"><code class="sig">abstract class JsonNodeFactory&lt;T : JsonNode&gt;</code><a class="anchor" href="#JsonNodeFactory">#</a>
+<p>What makes a JsonNode of type T from JSON: newFromJson(obj), written by each such class.</p>
+</div>
+<div class="entry member" id="JsonNodeFactory.newFromJson"><code class="sig">fun newFromJson(txt : string) : T throws JsonParseException</code><a class="anchor" href="#JsonNodeFactory.newFromJson">#</a>
+<p><code>txt</code> read and given to newFromJson(obj).</p>
+</div>
+<div class="entry member" id="JsonNodeFactory.newFromJson-2"><code class="sig">fun newFromJson(obj : JsonValue) : T</code><a class="anchor" href="#JsonNodeFactory.newFromJson-2">#</a>
+<p>A new T made from <code>obj</code>.</p>
+</div>
+<div class="entry" id="JsonDiff"><code class="sig">abstract class JsonDiff</code><a class="anchor" href="#JsonDiff">#</a>
+<p>One difference between two JsonValue trees, as diffJson finds it, with where it is: &quot;/a/b[2]&quot;.</p>
+</div>
+<div class="entry member" id="JsonDiff.ValueChanged"><code class="sig">data ValueChanged(val path : string, val old : any?, val new : any?) : JsonDiff()</code><a class="anchor" href="#JsonDiff.ValueChanged">#</a>
+<p>A value in both trees, changed.</p>
+</div>
+<div class="entry member" id="JsonDiff.MissingInNew"><code class="sig">data MissingInNew(val path : string, val old : any?) : JsonDiff()</code><a class="anchor" href="#JsonDiff.MissingInNew">#</a>
+<p>A value in the old tree and not the new.</p>
+</div>
+<div class="entry member" id="JsonDiff.MissingInOld"><code class="sig">data MissingInOld(val path : string, val new : any?) : JsonDiff()</code><a class="anchor" href="#JsonDiff.MissingInOld">#</a>
+<p>A value in the new tree and not the old.</p>
+</div>
+<div class="entry" id="diffJson"><code class="sig">fun diffJson(old : JsonValue, new : JsonValue, path : string = &quot;&quot;) : List&lt;JsonDiff&gt;</code><a class="anchor" href="#diffJson">#</a>
+<p>Every difference between <code>old</code> and <code>new</code>, gone through as objects and arrays. A whole number and one with a fraction are never equal, so 1 against 1.0 is a change.</p>
+</div>
+<div class="entry" id="jsonValuesEqual"><code class="sig">fun jsonValuesEqual(a : JsonValue, b : JsonValue) : bool</code><a class="anchor" href="#jsonValuesEqual">#</a>
+<p>Whether two values that are neither objects nor arrays are equal: of one kind, with one value.</p>
+</div>
+<h3>Reading</h3>
+<h3>Writing</h3>
+<h3>Data classes and enums</h3>
+<h3>Floats</h3>
+</section>
 <section class="file" id="file-list-ww">
 <h2>list.ww</h2>
 <h3>Lists</h3>
@@ -5634,6 +5915,9 @@ val indices = image.pixels.paletteIndices(colors, Dither.none)
 <h2>reflect.ww</h2>
 <h3>Reflection</h3>
 <p><code>Image#</code> is the class named Image and <code>x#</code> the class of the object x: a Class. It tells the class's name, what it extends and implements and the type arguments it was given, and lists its fields, methods and constructors, as far as the code where the <code>#</code> is written may use them: what a class keeps private is listed only to that class's own code. A member listed is read, set or called by its name, through what lists it.</p>
+<p>In a generic function or class, <code>T#</code> is the class of the type argument T was given:</p>
+<pre>fun &lt;T&gt; make() : T =&gt; T#.constructors[0].call() as T
+</pre>
 <p>What a method or constructor called this way throws arrives wrapped in a checked InvocationTargetException, the original in <code>cause</code>. A call the member cannot take, as one with too few arguments or of the wrong types, or on an object of another class, is an IllegalArgumentException of its own.</p>
 <div class="entry" id="Class"><code class="sig">class Class(internal val type : Type, internal val asker : any? = null)</code><a class="anchor" href="#Class">#</a>
 <p>A class, or a built-in type, as <code>Image#</code> or <code>x#</code> gives it, with its type arguments (the class of a Box&lt;int&gt; is Box&lt;int&gt;), and as <code>items.itemType</code> gives what a list was made to hold: a type as the program runs is always a Class. What it lists is what the code where the <code>#</code> is written may use. <code>type</code> is the type it stands for, which only the standard library sees.</p>
@@ -5655,6 +5939,12 @@ val indices = image.pixels.paletteIndices(colors, Dither.none)
 </div>
 <div class="entry member" id="Class.kinds"><code class="sig">val kinds : List&lt;Class&gt;</code><a class="anchor" href="#Class.kinds">#</a>
 <p>The kinds of an enum class, in the order they are written: none for any other.</p>
+</div>
+<div class="entry member" id="Class.isData"><code class="sig">val isData : bool</code><a class="anchor" href="#Class.isData">#</a>
+<p>Whether it is a data class: compared, printed and taken apart by the fields in its header.</p>
+</div>
+<div class="entry member" id="Class.entries"><code class="sig">val entries : List&lt;any&gt;</code><a class="anchor" href="#Class.entries">#</a>
+<p>An enum's entries, in the order they are written, as Name.entries gives them: none for any other class.</p>
 </div>
 <div class="entry member" id="Class.fields"><code class="sig">val fields : List&lt;Field&gt;</code><a class="anchor" href="#Class.fields">#</a>
 <p>Its fields and properties, those of the classes above it first: each one the code that wrote the <code>#</code> may use.</p>
@@ -5790,6 +6080,9 @@ val indices = image.pixels.paletteIndices(colors, Dither.none)
 </div>
 <div class="entry member" id="Constructor.call"><code class="sig">fun call(vararg args : any?) : any throws InvocationTargetException</code><a class="anchor" href="#Constructor.call">#</a>
 <p>A new object of the class, with its type arguments, made from <code>args</code>.</p>
+</div>
+<div class="entry member" id="Constructor.callBy"><code class="sig">fun callBy(arguments : Map&lt;string, any?&gt;) : any throws InvocationTargetException</code><a class="anchor" href="#Constructor.callBy">#</a>
+<p>A new object of the class made from <code>arguments</code> by the parameters' names, each one left out given its default, as a call by name is: Point#.constructors[0].callBy({&quot;y&quot;: 2}). An IllegalArgumentException for a name it has no parameter of, a value of the wrong type, or a parameter left out that has no default.</p>
 </div>
 <div class="entry member" id="Constructor.annotation"><code class="sig">fun &lt;A&gt; annotation() : A?</code><a class="anchor" href="#Constructor.annotation">#</a>
 <p>The first annotation written on it that is an <code>A</code>; null where there is none.</p>

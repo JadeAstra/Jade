@@ -4840,6 +4840,15 @@ struct Checker::Impl {
                 return unknownType();
             }
         }
+        // A call of a generic function where a type is expected: what its arguments leave of its
+        // type parameters is worked out from the type its result is to be (callWith), so that
+        // `val p : Point = Json.read(text)` passes Point, as Json.read<Point>(text) does.
+        if (e.kind == ExprKind::Call && expected.known() && expected.kind != Type::Unit) {
+            callExpected[&e] = expected;
+            const Type made = exprExpectedLiteral(e, expected);
+            callExpected.erase(&e);
+            return made;
+        }
         // `flag ? up : down` where a Way is expected: each branch is, the same.
         if (e.kind == ExprKind::Ternary) {
             ternaryExpected[&e] = expected;
@@ -5812,13 +5821,16 @@ struct Checker::Impl {
     }
 
     // `grid[x, y] = v` on a class with several forms of op []=: the one its indexes and value fit.
-    void indexSetForm(const AssignExpr& a, const Type& value) {
+    // The op []= form `a[i] = v` calls. True where that form takes the value, as it may where
+    // the class's op [] gives another type: JsonObject's `obj["count"] = 3`, whose op [] gives a
+    // JsonValue?, is the op []= that takes an int.
+    bool indexSetForm(const AssignExpr& a, const Type& value) {
         const auto& ix = static_cast<const IndexExpr&>(*a.target);
-        if (ix.defaultValue) return;
+        if (ix.defaultValue) return false;
         const Type holder = typeQuietly(*ix.object);
-        if (holder.kind != Type::Class || holder.cls == nullptr || holder.nullable) return;
+        if (holder.kind != Type::Class || holder.cls == nullptr || holder.nullable) return false;
         Member m = lookupMember(holder, "[]=");
-        if (m.methods.empty()) return;
+        if (m.methods.empty()) return false;
         std::vector<Type> args{typeQuietly(*ix.index)};
         for (const ExprPtr& more : ix.more) args.push_back(typeQuietly(*more));
         args.push_back(value);
@@ -5832,7 +5844,10 @@ struct Checker::Impl {
                 for (size_t i = 0; i < args.size(); i++) b.paramOf.push_back(static_cast<int>(i));
                 noteInlineCall(f, b, a);
             }
+            resolveFunc(f);
+            return value.known() && fits(value, subst(f->params.back(), m.env));
         }
+        return false;
     }
 
     static std::string opText(TokenType op) {
@@ -7014,7 +7029,7 @@ struct Checker::Impl {
         }
         if (targetPlace != nullptr) notePlaceLocalChange(targetPlace, &a);
         else if (local != nullptr && valueClass(value) && silent == 0) keptStores.insert(&a);
-        if (a.op == TokenType::Eq && a.target->kind == ExprKind::Index) indexSetForm(a, value);
+        const bool setterTakes = a.op == TokenType::Eq && a.target->kind == ExprKind::Index && indexSetForm(a, value);
         if (local != nullptr) {
             forget(targetName);
             // `next = Dog("Fido")`: from here on it is that value, not null.
@@ -7052,7 +7067,7 @@ struct Checker::Impl {
                 return Type::of(Type::Unit);
             }
         }
-        if (!fits(result, target)) {
+        if (!fits(result, target) && !setterTakes) {
             std::string who = targetName.empty() ? "this place" : "'" + targetName + "'";
             if (a.op == TokenType::Eq)
                 report(*a.value, who + " is " + describe(target) + "; it cannot be given " + describe(result) + toByteAdvice(result, target, *a.value));
@@ -7344,6 +7359,8 @@ struct Checker::Impl {
         written.col = c.col;
         written.name = first + dotted;
         written.args = c.typeArgs;
+        // `T#` in a generic function or class: the class of the type argument it was given.
+        written.typeParam = dotted.empty() && c.typeArgs.empty() && typeParamHere(first);
         silent++;
         Type t = resolve(written, *unit);
         silent--;
@@ -8058,6 +8075,42 @@ struct Checker::Impl {
     // A call to a declared function with arguments: their types are checked, the function's
     // own type parameters worked out from them (and the receiver, for an extension), and the
     // result given with them filled in. `env` holds what a generic class's parameters stand for.
+    // Whether a type names a type parameter anywhere in it. An expected type that does is not
+    // used to work out a call's (fillFromExpected): `Set(this)` in `List<T>.toSet() : Set<T>`
+    // would be given the caller's T, which may be unknown as the program runs, where the set
+    // takes its items' type from the list instead.
+    static bool namesTypeParam(const Type& t) {
+        if (t.kind == Type::TypeParam) return true;
+        for (const Type& a : t.args)
+            if (namesTypeParam(a)) return true;
+        if (t.result && namesTypeParam(*t.result)) return true;
+        if (t.receiver && namesTypeParam(*t.receiver)) return true;
+        return false;
+    }
+
+    // The type each call checked through exprExpected is to give, while it is checked.
+    std::unordered_map<const Node*, Type> callExpected;
+
+    // The type parameters a call's arguments left unknown, worked out from the type its result
+    // is to be, where that is known: `val s : Set<string> = setOf()` makes T string, which is
+    // then passed as the program runs.
+    void fillFromExpected(FuncInfo* f, Env& env, const std::vector<std::string>& vars, const Node& at) {
+        auto found = callExpected.find(&at);
+        if (found == callExpected.end() || namesTypeParam(found->second)) return;
+        std::vector<std::string> open;
+        for (const std::string& v : vars)
+            if (!env.count(v) || env[v].unknown()) open.push_back(v);
+        if (open.empty()) return;
+        Env more;
+        for (const auto& [name, type] : env)
+            if (std::find(open.begin(), open.end(), name) == open.end()) more.emplace(name, type);
+        unify(resultOf(f), found->second, more, open);
+        for (const std::string& v : open) {
+            auto bound = more.find(v);
+            if (bound != more.end() && bound->second.known()) env[v] = bound->second;
+        }
+    }
+
     Type callWith(FuncInfo* f, const Args& args, const std::vector<TypeAnnotation>& typeArgs, Env env,
                   const Type* receiver, const Node& at, const std::string& what, Env* envOut = nullptr) {
         resolveFunc(f);
@@ -8073,6 +8126,7 @@ struct Checker::Impl {
         }
         if (args.spread) {
             for (const ExprPtr& a : args.exprs) expr(*a);
+            fillFromExpected(f, env, vars, at);
             if (envOut != nullptr) *envOut = env;
             noteTypeArguments(f, env, at);
             // Where every list spread goes to the vararg, each argument's parameter is known, and
@@ -8170,6 +8224,7 @@ struct Checker::Impl {
                                                toByteAdvice(types[i], want, *args.exprs[i]));
             }
         }
+        fillFromExpected(f, env, vars, at);
         if (envOut != nullptr) *envOut = env;
         noteTypeArguments(f, env, at);
         noteNewValueAdded(f, receiver, args, at);

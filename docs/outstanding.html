@@ -100,7 +100,7 @@ pre code { background: none; padding: 0; }
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (thirty-eight)</li>
+<li><a href="#decide">Waiting for the user</a> (forty)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (fourteen)</li>
@@ -338,9 +338,32 @@ pre code { background: none; padding: 0; }
 
 <section class="item" id="o-set-tolist-type">
 <h3><code>Set&lt;T&gt;.toList()</code> under the native-results check</h3>
-<p class="status"><span class="label">Recommended</span> Open</p>
+<p class="status"><span class="label">Recommended</span> Done</p>
 <p>Found 2026-11-19: with <code>WW_CHECK_NATIVE_RESULTS=1</code>, Snippy's translator stops at <code>globalNames.toList()</code>: "the C++ function Set&lt;T&gt;.toList() gave a value of type List&lt;any&gt;, where its declaration says List&lt;string&gt;". The C++ gives the list the set's own item type; the set had none. It was made by <code>val s : open Set&lt;string&gt; = setOf()</code>, and a type argument the checker infers from the expected type alone (no argument to infer it from) is not passed as the program runs; <code>fun &lt;T&gt; f(vararg items : T) = Set&lt;T&gt;(items)</code> called so is untyped too.</p>
 <p>Snippy now makes its sets with <code>Set&lt;string&gt;()</code>, which the suite's native-results setting needed; the compiler's side is left.</p>
+<p><em>Fixed 2026-11-19 (0.9.5040)</em>, as <code>val p : Point = Json.read(text)</code> needed it too: a type parameter a call's arguments leave unknown is worked out from the type its result is to be, where that is known (the checker's <code>fillFromExpected</code>), and passed as the program runs as one written at the call is. <code>val s : open Set&lt;string&gt; = setOf()</code> makes a set of strings, and a generic call given as an argument takes the parameter's type (<code>tests/generic_made_types.ww</code>, <code>tests/json.ww</code>).</p>
+</section>
+
+<section class="item" id="o-json">
+<h3>JSON in the standard library, as Python's json reads and writes it</h3>
+<p class="status"><span class="label">Recommended</span> Done</p>
+<p>At the user's word (2026-11-19: "should we add jadelib's json into ww, so the snippy json can use that?", then "can we bring jadelibs' JSON closer to pythons json?"; decided: the names <code>Json.read</code> and <code>Json.write</code>, the standard library with no import, floats in Python's form everywhere; then "should we change the json stuff from annotations to something built into ww?", decided: data classes read and written by themselves, JsonBean and its annotation dropped, <code>T#</code> in generic functions). Built 2026-11-19 (0.9.5040) in <code>src/std/json.ww</code>, in WinterWolf.</p>
+<h4 id="o-json-reading">Reading and writing as Python's</h4>
+<p><code>Json.read(text)</code> gives plain values (a map with its keys in order, a list, an int or a BigInt past one, a float, a string, a bool, null) and takes Python's options: <code>strict</code>, <code>objectHook</code>, <code>objectPairsHook</code>, <code>parseFloat</code>, <code>parseInt</code>, <code>parseConstant</code>; <code>Json.rawDecode</code> is Python's <code>raw_decode</code>. NaN, Infinity and -Infinity are read, the last of two keys of one name is kept, and text that is not JSON is a <code>JsonParseException</code> (an IllegalStateException, as JadeLib's was) with Python's message, line, column and character. <code>Json.write(value)</code> takes <code>indent</code>, <code>itemSeparator</code>, <code>keySeparator</code>, <code>sortKeys</code>, <code>ensureAscii</code>, <code>allowNaN</code>, <code>skipKeys</code>, <code>checkCircular</code> and <code>default</code>, and writes floats as Python's repr does (<code>1e-05</code>, <code>1e+16</code>).</p>
+<p>Checked against CPython 3.14: 84 texts read, errors and all, and 24 values written with every option and the errors of writing, character for character (<code>tests/json.ww</code>, its expected output made by <code>tools/json/cpython.py</code> into <code>tests/json_cases</code>). Where it is not Python's: half a pair of UTF-16 surrogates with no other half reads as U+FFFD, which a string can hold where half a pair it cannot.</p>
+<h4 id="o-json-typed">Data classes, enums and typed reading</h4>
+<p><code>Json.read&lt;Row&gt;(text)</code>, or <code>val row : Row = Json.read(text)</code>, makes a data class through its constructor from the object's keys, a key left out given its default; enums by their entries' names; lists, sets and maps of anything readable, a map's keys made ints, floats or entries where the type says; a JsonValue as toJsonVal gives it. A value that does not fit is a JsonParseException naming where it is (<code>$.tags[0].name: an int where a string is wanted</code>). <code>Json.write</code> writes a data class as an object of its header's fields and an entry as its name. <code>@JsonField(name = ..., skip = true)</code> gives a field another key or leaves it out.</p>
+<p>Added to the language and the library for it: <code>T#</code> in a generic function or class, the class of its type argument (<code>tests/reflection.ww</code>); <code>Class.isData</code>, <code>Class.entries</code> and <code>Constructor.callBy(arguments)</code>, a constructor called by its parameters' names, the rest left to their defaults; <code>obj[k] = v</code> checked against the <code>op []=</code> that takes it where the class's <code>op []</code> gives another type, as JsonObject's setters need; and <code>"1e400".toFloat()</code> infinite and <code>"1e-400".toFloat()</code> zero, as Kotlin's, Java's and Python's are, where they were errors.</p>
+<h4 id="o-json-tree">JadeLib's tree</h4>
+<p>JsonValue and its kinds (JsonObject with its typed setters and getters, JsonArray, JsonString, JsonInt, JsonBigInt past an int, JsonDouble, JsonBool, JsonNull), <code>toJsonVal</code>, <code>toJsonObj</code>, <code>toJsonText</code> (its layout as it was, floats now in Python's form), <code>jsonValueOf</code>, JsonNode and JsonNodeFactory, <code>diffJson</code> and <code>jsonValuesEqual</code>, by JadeLib's names; JadeLib's tests ported in <code>tests/json_tree.ww</code>. Not ported, by decision: JsonBean, JsonBeanField, <code>autoSerialize</code>, <code>autoDeserialize</code> and <code>loadJsonBean</code>, which data classes replace (JadeGen's 87 annotated fields become data classes when it is ported). Snippy's float writing now uses the library's (<code>__reprFloat</code>).</p>
+<p>Found on the way: <code>snippy_run.ww</code> passed under GC stress only when run alone. Its 61 programs, each in a ww of its own and stressed too, took 555 s alone with 0.9.5039 and 586 s with the standard library grown by JSON, at the 600 s limit, and past it with the suite around them. Under the quick setting (<code>WW_TEST_QUICK=1</code>) it now runs every third program, the same each time, in 161 s; all of them otherwise, and with <code>--full</code>.</p>
+</section>
+
+<section class="item" id="o-json-speed">
+<h3>JSON's speed</h3>
+<p class="status"><span class="label">Recommended</span> Open</p>
+<p>Measured 2026-11-19 on a document of 6.1 million characters (50,000 objects of numbers, strings and lists): <code>Json.read</code> 0.4 to 1.1 s and <code>Json.write</code> 0.95 to 1.9 s, against CPython's 44 ms and 37 ms (its module in C), 10 to 40 times as long. The same work varies by two from one run to the next, as earlier runs' values fill the heap. Writing a string checks for characters to escape with one regular expression and writes it whole where there are none; a search by regular expression for the end of each string read was slower than the loop over its characters, and is not kept.</p>
+<p>Ways, to be chosen: native code taking the loops over a string's characters (a template for "to the next of these characters", as the byte-mix and fill templates are); or a scan in C++, as XML's is, giving where each token is for WinterWolf to make the values from (<code>Xml.parse</code> works so). Both are to be measured against what the collector costs first.</p>
 </section>
 
 <section class="item" id="o-snippy-52-left">

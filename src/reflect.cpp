@@ -183,6 +183,46 @@ void registerReflection(VM& vm) {
     vm.defineNative("__typeKinds", 1, 1, [](VM& vm, int, Value* args) -> Value {
         return ownPart(vm, typeGiven(vm, args[0]), 0, 2);
     });
+    // A new empty list, set or map of the type given, made to hold what its type says, as
+    // `val xs : open List<Point> = []` is: what JSON reads into a List<Point> is made in one.
+    // One name for each, so that each is declared with what it gives.
+    static const auto newCollection = [](VM& vm, Value given, uint8_t kind) -> Value {
+        ObjTypeInfo* t = const_cast<ObjTypeInfo*>(typeGiven(vm, given));
+        if (t->id != kind) throw vm.runtimeError(Thrown::IllegalArgumentException, vm.typeInfoText(t) + " is not the kind of collection asked for");
+        if (t->id == kTypeList) {
+            ObjList* list = vm.alloc<ObjList>();
+            TempRoot keep(vm, Value::object(list));
+            vm.typeList(list, t);
+            return Value::object(list);
+        }
+        if (t->id == kTypeSet) {
+            ObjSet* set = vm.alloc<ObjSet>();
+            set->type = t;
+            return Value::object(set);
+        }
+        ObjMap* map = vm.alloc<ObjMap>();
+        map->type = t;
+        return Value::object(map);
+    };
+    vm.defineNative("__typeNewList", 1, 1, [](VM& vm, int, Value* args) -> Value { return newCollection(vm, args[0], kTypeList); });
+    vm.defineNative("__typeNewSet", 1, 1, [](VM& vm, int, Value* args) -> Value { return newCollection(vm, args[0], kTypeSet); });
+    vm.defineNative("__typeNewMap", 1, 1, [](VM& vm, int, Value* args) -> Value { return newCollection(vm, args[0], kTypeMap); });
+    // Whether the class is a data class.
+    vm.defineNative("__typeIsData", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const ObjTypeInfo* t = typeGiven(vm, args[0]);
+        return Value::boolean(t->id == kTypeInstance && t->cls->isData);
+    });
+    // An enum's entries, in the order they are written, in a list of their own; none for any
+    // other class.
+    vm.defineNative("__typeEntries", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const ObjTypeInfo* t = typeGiven(vm, args[0]);
+        std::vector<Value> entries;
+        if (t->id == kTypeInstance && t->cls->isEnum) {
+            const Value* list = t->cls->statics.find(vm.names.enumEntries);
+            if (list != nullptr && list->isObjType(ObjType::List)) entries = asList(*list)->values();
+        }
+        return Value::object(newList(vm, std::move(entries)));
+    });
 
     // A member used by its name, whoever may use it: what a Field or a Method listed.
     vm.defineNative("__memberGet", 2, 2, [](VM& vm, int, Value* args) -> Value {
@@ -204,6 +244,24 @@ void registerReflection(VM& vm) {
         if (t->id != kTypeInstance) throw vm.runtimeError(Thrown::IllegalArgumentException, vm.typeInfoText(t) + " is made by no constructor");
         const std::vector<Value> values = argumentsOf(vm, args[1]);
         return vm.callWithTypes(Value::object(t->cls), t->args, static_cast<int>(values.size()), values.data());
+    });
+
+    // A new object of the class, as __typeConstruct, but with the arguments `given` says were
+    // left out left to their defaults (Constructor.callBy): `form` names the static function of
+    // a secondary constructor, null for the class's own. Each one left out goes in as the
+    // argument a call by name leaves out does, which the function fills in from its default.
+    vm.defineNative("__typeConstructBy", 4, 4, [](VM& vm, int, Value* args) -> Value {
+        const ObjTypeInfo* t = typeGiven(vm, args[0]);
+        if (t->id != kTypeInstance) throw vm.runtimeError(Thrown::IllegalArgumentException, vm.typeInfoText(t) + " is made by no constructor");
+        std::vector<Value> values = argumentsOf(vm, args[2]);
+        if (!args[3].isObjType(ObjType::List) || asList(args[3])->size() != values.size())
+            throw vm.runtimeError(Thrown::InternalError, "__typeConstructBy: one flag for each argument");
+        for (size_t i = 0; i < values.size(); i++)
+            if (!vm.listGet(asList(args[3]), i).truthy()) values[i] = Value::undefined();
+        if (args[1].isNull()) return vm.callWithTypes(Value::object(t->cls), t->args, static_cast<int>(values.size()), values.data());
+        const Value made = vm.memberGet(Value::object(t->cls), vm.intern(vm.toStr(args[1], "a constructor's name")));
+        TempRoot keep(vm, made);
+        return vm.call(made, static_cast<int>(values.size()), values.data());
     });
 
     // The library a type comes from: "ww" for a built-in type, a library's class its library's

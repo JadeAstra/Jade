@@ -1,0 +1,1311 @@
+// ---- JSON ----
+
+// JSON read and written (RFC 8259), the way Python's json module reads and writes it, and a
+// tree of JSON values to build and look through (JadeLib's).
+//
+//   val config = Json.read(text) as Map<string, any?>        // plain values
+//   val p = Json.read<Point>("{\"x\": 1, \"y\": 2}")          // a data class, made from it
+//   print(Json.write(p, indent = 2))
+//   val tree = toJsonVal(text)                               // a JsonValue tree
+//   print(tree["items"]?[0]?.toInt())
+//
+// Reading takes what Python's does and gives what it gives: whole numbers of any size (a BigInt
+// past an int), NaN, Infinity and -Infinity, the last of two keys of one name, and nothing
+// after the value but spaces, tabs and line ends. Text that is not JSON is a
+// JsonParseException saying what was expected and where, in Python's words: "Expecting ','
+// delimiter: line 3 column 7 (char 41)". A \u escape of half a pair of UTF-16 surrogates with
+// no other half reads as U+FFFD, which a string can hold where half a pair it cannot.
+//
+// Writing gives what Python's does, its options with theirs: floats in Python's form ("1e-05",
+// "1e+16", "0.1"), every character past ASCII as a \u escape unless ensureAscii is false, and
+// an error for a value JSON has no form of, unless `default` makes it one.
+//
+// A data class is read and written as an object of the fields in its header, in their order,
+// each by its name; an enum's entry by its name, as a string. @JsonField on a field gives it
+// another key, or leaves it out.
+//
+//   data Row(@JsonField("row_id") val id : int, val label : string, @JsonField(skip = true) val cache : int = 0)
+object Json {
+  // The JSON value in `text`, as plain values: an object a Map<string, any?> with its keys in
+  // the order they come, an array a List<any?>, a string a string, a whole number an int (a
+  // BigInt past an int), any other number a float, true and false a bool, null null.
+  //
+  // Given a type, the value made into one: Json.read<Point>(text), Json.read<List<Point>>(text).
+  // A data class is made through its constructor from the object's keys, a key left out given
+  // the parameter's default; an enum's entry by its name; a list, a set or a map of anything
+  // that can be read; a JsonValue (Json.read<JsonObject>(text)) as toJsonVal gives it. A
+  // value that does not fit the type is a JsonParseException naming where it is, as
+  // "$.points[2].x: a string where an int is wanted".
+  //
+  // The rest are Python's json.loads's, by the same names:
+  //   strict          false lets a string hold the control characters below 0x20 as they are
+  //   objectHook      what each object is made into, given it as a map
+  //   objectPairsHook the same, given its keys and values in order, duplicates and all
+  //   parseFloat      what each number with a fraction or an exponent is made into, given its text
+  //   parseInt        the same for each whole number
+  //   parseConstant   the same for NaN, Infinity and -Infinity
+  fun <T> read(text : string, strict : bool = true, objectHook : ((Map<string, any?>) -> any?)? = null,
+                objectPairsHook : ((List<MapEntry<string, any?>>) -> any?)? = null,
+                parseFloat : ((string) -> any?)? = null, parseInt : ((string) -> any?)? = null,
+                parseConstant : ((string) -> any?)? = null) : T throws JsonParseException {
+    val wanted = T#
+    if (__jsonIsTree(wanted)) {
+      val tree = __JsonReader(text, strict, true, null, null, null, null, null).document()
+      if (!wanted.isInstance(tree)) { throw JsonParseException("$: " + __jsonA(__jsonKindOf(tree)) + " where " + __jsonA(wanted.name) + " is wanted") }
+      return tree as T
+    }
+    val value = __JsonReader(text, strict, false, objectHook, objectPairsHook, parseFloat, parseInt, parseConstant).document()
+    if (wanted.name == "any") { return value as T }
+    return __jsonConvert(value, wanted, "$") as T
+  }
+
+  // The JSON value at `at` in `text`, and where it ends, with whatever follows it left: as
+  // Python's raw_decode, which takes no spaces before the value.
+  fun rawDecode(text : string, at : int = 0, strict : bool = true) : JsonRead throws JsonParseException {
+    val reader = __JsonReader(text, strict, false, null, null, null, null, null)
+    val value = reader.valueAt(at)
+    return JsonRead(value, reader.end)
+  }
+
+  // `value` written as JSON. Plain values are written as Python writes them: null, a bool, an
+  // int or a BigInt, a float, a string (a char as one), a list as an array, a map as an
+  // object; and a JsonValue as itself, a JsonNode as its toJson(), a data class as an object
+  // of its header's fields, an enum's entry as its name.
+  //
+  // The rest are Python's json.dumps's, by the same names:
+  //   indent          null for all on one line; an int, that many spaces at each level, or a
+  //                   string put there, each item on a line of its own
+  //   itemSeparator   between items: ", " on one line, "," with an indent
+  //   keySeparator    between a key and its value: ": "
+  //   sortKeys        each object's keys in order: strings by their characters, numbers by size
+  //   ensureAscii     every character past ASCII as a \u escape (false: as it is)
+  //   allowNaN        NaN and the infinities written as NaN, Infinity and -Infinity (false: an error)
+  //   skipKeys        a map's key that is not a string, a number, a bool or null left out (false: an error)
+  //   checkCircular   a list or map inside itself an error (false: not looked for)
+  //   default         what a value JSON has no form of is written as instead
+  // A value JSON has no form of, with no `default`, is an IllegalArgumentException.
+  fun write(value : any?, indent : (int | string)? = null, itemSeparator : string? = null, keySeparator : string = ": ",
+            sortKeys : bool = false, ensureAscii : bool = true, allowNaN : bool = true, skipKeys : bool = false,
+            checkCircular : bool = true, default : ((any?) -> any?)? = null) : string {
+    var step : string? = null
+    if (indent is int) { step = " ".repeat(Math.max(0, indent as int)) } else if (indent is string) { step = indent as string }
+    val items = itemSeparator ?: (step == null ? ", " : ",")
+    val writer = __JsonWriter(step, items, keySeparator, sortKeys, ensureAscii, allowNaN, skipKeys, checkCircular, default)
+    writer.write(value, 0)
+    return writer.out.toString()
+  }
+}
+
+// What Json.rawDecode gives: the value read, and where in the text it ended.
+data JsonRead(val value : any?, val end : int)
+
+// Text that is not JSON, or a value that does not fit the type it was read as. `description`
+// is what was wrong, as "Expecting value"; `position` the character it was found at, counted
+// from 0, and `line` and `column` where that is, each counted from 1 (-1 and 0 for a value
+// that does not fit). The message is all of them: "Expecting value: line 1 column 5 (char 4)";
+// JsonParseException(message) alone is one with nothing more to say.
+class JsonParseException(val description : string, val position : int = -1, val line : int = 0, val column : int = 0,
+                         message : string = description) : IllegalStateException(message)
+
+// On a data class's field: the key it is read and written by, in place of its name, or
+// (skip = true) left out of JSON altogether, read as its default.
+annotation JsonField(val name : string = "", val skip : bool = false)
+
+// ---- The tree (JadeLib's) ----
+
+// A JSON value: a JsonObject, JsonArray, JsonString, JsonInt (JsonBigInt past an int),
+// JsonDouble, JsonBool or JsonNull. Made by toJsonVal and toJsonObj, or built with JsonObject's
+// []=, and written by toJsonText. A whole number and one with a fraction are different
+// values, so 1 and 1.0 are not equal and diffJson tells them apart.
+abstract class JsonValue {
+  // As a float: a number's value, or a string's read as one; a NumberFormatException for
+  // anything else.
+  fun toFloat() : float => when (this) {
+    is JsonInt -> value.toFloat()
+    is JsonBigInt -> value.toFloat()
+    is JsonDouble -> value
+    is JsonString -> value.toFloat()
+    else -> throw NumberFormatException("not a number: ${this#.name}")
+  }
+
+  // As an int: a number's value (a fraction cut off), or a string's read as one; a
+  // NumberFormatException for anything else.
+  fun toInt() : int => when (this) {
+    is JsonInt -> value
+    is JsonBigInt -> value.toInt()
+    is JsonDouble -> value.toInt()
+    is JsonString -> value.toInt()
+    else -> throw NumberFormatException("not a number: ${this#.name}")
+  }
+
+  // A string's text; an IllegalStateException for anything else.
+  fun stringValue() : string => when (this) {
+    is JsonString -> value
+    else -> throw IllegalStateException("not a string: ${this#.name}")
+  }
+
+  // An object's value for `key`; null where it has none, or for anything but an object.
+  op [](key : string) : JsonValue? => this is JsonObject ? (this as JsonObject).map[key] : null
+
+  // An array's item at `index`; null past its end, or for anything but an array.
+  op [](index : int) : JsonValue? {
+    if (this !is JsonArray) { return null }
+    val list = (this as JsonArray).list
+    return index >= 0 and index < list.size ? list[index] : null
+  }
+
+  // A bool's value; null for anything else.
+  fun toBool() : bool? => this is JsonBool ? (this as JsonBool).value : null
+
+  // An array's items as floats; null for anything but an array.
+  fun toFloatArray() : List<float>? => this is JsonArray ? (this as JsonArray).list.map { it.toFloat() } : null
+
+  // An array of indexes as the items of `sourceList` they point at, those past its end left
+  // out; null for anything but an array.
+  fun <T> toListFromIndexList(sourceList : List<T>) : List<T>? {
+    if (this !is JsonArray) { return null }
+    val out : open List<T> = []
+    for (t in (this as JsonArray).list) {
+      val index = t.toInt()
+      if (index >= 0 and index < sourceList.size) { out.add(sourceList[index]) }
+    }
+    return out
+  }
+
+  // A number as an int, as toInt() gives it; null for anything else.
+  fun asIntOrNull() : int? => this is JsonInt or this is JsonBigInt or this is JsonDouble ? toInt() : null
+
+  // A number as a float; null for anything else.
+  fun asDoubleOrNull() : float? => this is JsonInt or this is JsonBigInt or this is JsonDouble ? toFloat() : null
+
+  // Written as JSON text: with `prettyPrint` each item on a line of its own, `tab` once more at
+  // each level (starting at `level`), and ": " after each key; else all on one line, with
+  // nothing between the parts. Characters past ASCII are written as they are.
+  fun toJsonText(prettyPrint : bool = true, level : int = 0, tab : string = "    ") : string {
+    val writer = __JsonWriter(prettyPrint ? tab : null, ",", prettyPrint ? ": " : ":", false, false, true, false, false, null)
+    writer.write(this, level)
+    return writer.out.toString()
+  }
+}
+
+// A JSON object: its keys and values in `map`, and in `keyOrder` the order it is written in.
+data JsonObject(val map : open Map<string, JsonValue> = {:}, val keyOrder : open List<string> = []) : JsonValue() {
+  // Sets `key` to `value`, adding it to the end of keyOrder where it is new.
+  fun add(key : string, value : JsonValue) {
+    if (key !in keyOrder) { keyOrder.add(key) }
+    map[key] = value
+  }
+
+  // Sets `key` to a float; null takes the key out.
+  op []=(key : string, value : float?) { if (value != null) { add(key, JsonDouble(value!!)) } else { map.remove(key) } }
+  // Sets `key` to an int; null takes the key out.
+  op []=(key : string, value : int?) { if (value != null) { add(key, JsonInt(value!!)) } else { map.remove(key) } }
+  // Sets `key` to a string; null takes the key out.
+  op []=(key : string, value : string?) { if (value != null) { add(key, JsonString(value!!)) } else { map.remove(key) } }
+  // Sets `key` to a bool.
+  op []=(key : string, value : bool) { add(key, JsonBool(value)) }
+  // Sets `key` to JSON's null.
+  op []=(key : string, value : nothing?) { add(key, JsonNull) }
+  // Sets `key` to a JsonValue; null takes the key out.
+  op []=(key : string, value : JsonValue?) { if (value != null) { add(key, value!!) } else { map.remove(key) } }
+  // Sets `key` to anything jsonValueOf makes a JsonValue of.
+  op []=(key : string, value : any?) { add(key, jsonValueOf(value)) }
+
+  // The int at `key`; an IllegalStateException where there is none.
+  fun intValue(key : string) : int {
+    val t = map[key]
+    if (t == null) { throw IllegalStateException("missing key '$key'") }
+    return t!!.toInt()
+  }
+
+  // The int at `key`, or `default` where there is none or it is not a number.
+  fun intValue(key : string, default : int) : int {
+    val v = map[key]
+    if (v == null) { return default }
+    try { return v!!.toInt() } catch (e : Exception) { return default }
+  }
+
+  // The number at `key` as a float; an IllegalStateException where there is none.
+  fun doubleValue(key : string) : float {
+    val v = map[key]
+    if (v is JsonDouble) { return (v as JsonDouble).value }
+    if (v is JsonInt) { return (v as JsonInt).value.toFloat() }
+    if (v is JsonBigInt) { return (v as JsonBigInt).value.toFloat() }
+    throw IllegalStateException("missing or non-numeric key '$key'")
+  }
+
+  // The string at `key`; a ClassCastException where it is not one.
+  fun stringValue(key : string) : string => (map[key] as JsonString).value
+
+  // The array at `key` as a new list; null where there is none.
+  fun arrayValue(key : string) : List<JsonValue>? {
+    val t = map[key]
+    if (t == null) { return null }
+    return (t as JsonArray).list.toOpenList()
+  }
+
+  // The object at `key`; a ClassCastException where it is not one.
+  fun objectValue(key : string) : JsonObject => map[key] as JsonObject
+
+  // Its keys and values, as {a:1,b:"x"}: for reading, not JSON (toJsonText writes that).
+  override fun toString() : string => "{" + map.entries.map { "${it.key}:${it.value}" }.join(",") + "}"
+}
+
+// A JSON array, gone through by a for as its items.
+data JsonArray(val list : List<JsonValue> = []) : JsonValue(), Iterable<JsonValue> {
+  // Its items, in order.
+  override fun iterator() : Iterator<JsonValue> => __JsonItems(list)
+  // Its items, as [1,"x"]: for reading, not JSON.
+  override fun toString() : string => "[" + list.join(",") + "]"
+}
+
+class __JsonItems(private val list : List<JsonValue>) : Iterator<JsonValue> {
+  private var at = 0
+  override fun hasNext() : bool => at < list.size
+  override fun next() : JsonValue {
+    val item = list[at]
+    at += 1
+    return item
+  }
+}
+
+// A JSON string.
+data JsonString(val value : string) : JsonValue() {
+  // The text in quotes, as it is.
+  override fun toString() : string => "\"$value\""
+}
+
+// A JSON whole number that fits in an int.
+data JsonInt(val value : int) : JsonValue() {
+  // The number.
+  override fun toString() : string => "$value"
+}
+
+// A JSON whole number past an int.
+data JsonBigInt(val value : BigInt) : JsonValue() {
+  // The number.
+  override fun toString() : string => "$value"
+}
+
+// A JSON number with a fraction or an exponent, or NaN or an infinity.
+data JsonDouble(val value : float) : JsonValue() {
+  // The number, as JSON writes it: "1.0", "1e-05".
+  override fun toString() : string => __reprFloat(value)
+}
+
+// A JSON bool.
+data JsonBool(val value : bool) : JsonValue() {
+  // "true" or "false".
+  override fun toString() : string => value ? "true" : "false"
+}
+
+// JSON's null.
+object JsonNull : JsonValue() {
+  // "null".
+  override fun toString() : string => "null"
+}
+
+// The JsonValue in `jsonText`, read as Json.read reads it.
+fun toJsonVal(jsonText : string) : JsonValue throws JsonParseException => __JsonReader(jsonText, true, true, null, null, null, null, null).document() as JsonValue
+
+// The JsonObject in `jsonText`; a ClassCastException where the value is not an object.
+fun toJsonObj(jsonText : string) : JsonObject throws JsonParseException => toJsonVal(jsonText) as JsonObject
+
+// `jsonStruct` written as JSON text, as its toJsonText() writes it.
+fun toJsonText(jsonStruct : JsonValue) : string => jsonStruct.toJsonText()
+
+// Anything as a JsonValue: a JsonValue as it is, a JsonNode as its toJson(), a data class as an
+// object of its header's fields, an enum's entry as its name, null, a bool, a number or a
+// string as one, a list or a set as an array of its items, a map as an object of the items
+// whose keys are strings. An IllegalArgumentException for anything else.
+fun jsonValueOf(value : any?) : JsonValue {
+  if (value == null) { return JsonNull }
+  if (value is JsonValue) { return value as JsonValue }
+  if (value is JsonNode) { return (value as JsonNode).toJson() }
+  if (value is bool) { return JsonBool(value as bool) }
+  if (value is int) { return JsonInt(value as int) }
+  if (value is BigInt) { return JsonBigInt(value as BigInt) }
+  if (value is float) { return JsonDouble(value as float) }
+  if (value is string) { return JsonString(value as string) }
+  if (value is char) { return JsonString((value as char).toString()) }
+  if (value is List) { return JsonArray((value as List<any?>).map { jsonValueOf(it) }) }
+  if (value is Set) { return JsonArray((value as Set<any?>).map { jsonValueOf(it) }) }
+  if (value is Map) {
+    val obj = JsonObject()
+    for ((k, v) in value as Map<any?, any?>) {
+      if (k is string) { obj.add(k as string, jsonValueOf(v)) }
+    }
+    return obj
+  }
+  val cls = value#
+  if (cls.entries.isNotEmpty()) { return JsonString(__jsonEntryName(value)) }
+  if (cls.isData) {
+    val obj = JsonObject()
+    for (f in __jsonFieldsOf(cls)) { obj.add(f.key, jsonValueOf(__jsonGet(f, value))) }
+    return obj
+  }
+  throw IllegalArgumentException("a ${cls.name} cannot be made JSON: make it a data class, or extend JsonNode")
+}
+
+// A class written to and read from JSON by hand, with no reflection: it fills an object in
+// toJson(value) and, where it is read back, reads one in fromJson(obj).
+abstract class JsonNode {
+  // A new JsonObject that toJson(value) fills.
+  fun toJson() : JsonValue {
+    val value = JsonObject()
+    toJson(value)
+    return value
+  }
+
+  // `txt` read and given to fromJson(obj).
+  fun fromJson(txt : string) throws JsonParseException { fromJson(toJsonVal(txt)) }
+
+  // Puts what it holds in `value`: written by each class that is written.
+  protected fun toJson(value : JsonObject) { throw NotImplementedError("override toJson() in extending class ${this#.name}") }
+
+  // Takes what it holds from `obj`: written by each class that is read.
+  protected fun fromJson(obj : JsonValue) { throw NotImplementedError("override fromJson() in extending class ${this#.name}") }
+
+  // The nodes' toJson(), in an array.
+  fun jsonList(nodeList : List<JsonNode>) : JsonArray => JsonArray(nodeList.map { it.toJson() })
+
+  // The ints in an array; null for null.
+  fun jsonList(intList : List<int>?) : JsonArray? => intList == null ? null : jsonValueOf(intList) as JsonArray
+
+  // The floats in an array; null for null.
+  fun jsonList(floatList : List<float>?) : JsonArray? => floatList == null ? null : jsonValueOf(floatList) as JsonArray
+
+  // A map of ints as an object; null for null.
+  fun jsonMap(intMap : Map<string, int>?) : JsonObject? => intMap == null ? null : jsonValueOf(intMap) as JsonObject
+
+  // The places in `sourceList` of the items of `dependantList`, in an array, those not in it
+  // left out.
+  fun <T : JsonNode> jsonListByIndex(dependantList : List<T>, sourceList : List<T>) : JsonArray {
+    val list : open List<JsonValue> = []
+    for (i in dependantList) {
+      val index = sourceList.indexOf(i)
+      if (index >= 0) { list.add(JsonInt(index)) }
+    }
+    return JsonArray(list)
+  }
+}
+
+// What makes a JsonNode of type T from JSON: newFromJson(obj), written by each such class.
+abstract class JsonNodeFactory<T : JsonNode> {
+  // `txt` read and given to newFromJson(obj).
+  fun newFromJson(txt : string) : T throws JsonParseException => newFromJson(toJsonVal(txt))
+
+  // A new T made from `obj`.
+  fun newFromJson(obj : JsonValue) : T { throw NotImplementedError("override newFromJson() in extending class") }
+}
+
+// One difference between two JsonValue trees, as diffJson finds it, with where it is: "/a/b[2]".
+abstract class JsonDiff {
+  // A value in both trees, changed.
+  data ValueChanged(val path : string, val old : any?, val new : any?) : JsonDiff()
+  // A value in the old tree and not the new.
+  data MissingInNew(val path : string, val old : any?) : JsonDiff()
+  // A value in the new tree and not the old.
+  data MissingInOld(val path : string, val new : any?) : JsonDiff()
+}
+
+// Every difference between `old` and `new`, gone through as objects and arrays. A whole number
+// and one with a fraction are never equal, so 1 against 1.0 is a change.
+fun diffJson(old : JsonValue, new : JsonValue, path : string = "") : List<JsonDiff> {
+  val diffs : open List<JsonDiff> = []
+  if (old is JsonObject and new is JsonObject) {
+    val o = (old as JsonObject).map
+    val n = (new as JsonObject).map
+    for (k in o.keys) { if (k !in n.keys) { diffs.add(JsonDiff.MissingInNew("$path/$k", o[k])) } }
+    for (k in n.keys) { if (k !in o.keys) { diffs.add(JsonDiff.MissingInOld("$path/$k", n[k])) } }
+    for (k in o.keys) { if (k in n.keys) { diffs.addAll(diffJson(o[k]!!, n[k]!!, "$path/$k")) } }
+  } else if (old is JsonArray and new is JsonArray) {
+    val o = (old as JsonArray).list
+    val n = (new as JsonArray).list
+    val shorter = Math.min(o.size, n.size)
+    for (i in 0 ..< shorter) { diffs.addAll(diffJson(o[i], n[i], "$path[$i]")) }
+    for (i in shorter ..< o.size) { diffs.add(JsonDiff.MissingInNew("$path[$i]", o[i])) }
+    for (i in shorter ..< n.size) { diffs.add(JsonDiff.MissingInOld("$path[$i]", n[i])) }
+  } else if (!jsonValuesEqual(old, new)) {
+    diffs.add(JsonDiff.ValueChanged(path, old, new))
+  }
+  return diffs
+}
+
+// Whether two values that are neither objects nor arrays are equal: of one kind, with one value.
+fun jsonValuesEqual(a : JsonValue, b : JsonValue) : bool {
+  if (a is JsonString and b is JsonString) { return (a as JsonString).value == (b as JsonString).value }
+  if ((a is JsonInt or a is JsonBigInt) and (b is JsonInt or b is JsonBigInt)) { return __jsonWhole(a) == __jsonWhole(b) }
+  if (a is JsonDouble and b is JsonDouble) { return (a as JsonDouble).value == (b as JsonDouble).value }
+  if (a is JsonBool and b is JsonBool) { return (a as JsonBool).value == (b as JsonBool).value }
+  return a === JsonNull and b === JsonNull
+}
+
+fun __jsonWhole(v : JsonValue) : BigInt => v is JsonInt ? BigInt.of((v as JsonInt).value) : (v as JsonBigInt).value
+
+// ---- Reading ----
+
+// A character a string written as JSON escapes: always, and with ensureAscii.
+val __jsonEscaped = Regex("[\"\\\\\\x00-\\x1F]")
+val __jsonEscapedAscii = Regex("[^\\x20-\\x21\\x23-\\x5B\\x5D-\\x7E]")
+
+// Reads JSON as Python's json module does, character for character, with its messages and
+// the places they name. `tree` makes JsonValues; otherwise plain values, through the hooks.
+class __JsonReader {
+  private val text : string
+  private val n : int
+  private val strict : bool
+  private val tree : bool
+  private val objectHook : ((Map<string, any?>) -> any?)?
+  private val objectPairsHook : ((List<MapEntry<string, any?>>) -> any?)?
+  private val parseFloat : ((string) -> any?)?
+  private val parseInt : ((string) -> any?)?
+  private val parseConstant : ((string) -> any?)?
+  // Where the value just read ends.
+  var end = 0
+
+  internal fun init(text : string, strict : bool, tree : bool, objectHook : ((Map<string, any?>) -> any?)?,
+                    objectPairsHook : ((List<MapEntry<string, any?>>) -> any?)?, parseFloat : ((string) -> any?)?,
+                    parseInt : ((string) -> any?)?, parseConstant : ((string) -> any?)?) {
+    this.text = text
+    this.n = text.size
+    this.strict = strict
+    this.tree = tree
+    this.objectHook = objectHook
+    this.objectPairsHook = objectPairsHook
+    this.parseFloat = parseFloat
+    this.parseInt = parseInt
+    this.parseConstant = parseConstant
+  }
+
+  // The whole text as one value, with spaces around it and nothing else.
+  fun document() : any? throws JsonParseException {
+    if (n > 0 and text[0] == '\u{FEFF}') { throw failure("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0) }
+    val value = valueAt(skip(0))
+    val after = skip(end)
+    if (after != n) { throw failure("Extra data", after) }
+    return value
+  }
+
+  // The value that starts at `i`, `end` set to just past it.
+  fun valueAt(i : int) : any? throws JsonParseException {
+    if (i >= n) { throw failure("Expecting value", i) }
+    val c = text[i]
+    if (c == '"') {
+      val s = stringAt(i + 1)
+      return tree ? JsonString(s) : s
+    }
+    if (c == '{') { return objectAt(i + 1) }
+    if (c == '[') { return arrayAt(i + 1) }
+    if (c == 'n' and startsAt(i, "null")) {
+      end = i + 4
+      return tree ? JsonNull : null
+    }
+    if (c == 't' and startsAt(i, "true")) {
+      end = i + 4
+      return tree ? JsonBool(true) : true
+    }
+    if (c == 'f' and startsAt(i, "false")) {
+      end = i + 5
+      return tree ? JsonBool(false) : false
+    }
+    if (c == '-' or (c >= '0' and c <= '9')) {
+      val number = numberAt(i)
+      if (number != null) { return number }
+    }
+    if (c == 'N' and startsAt(i, "NaN")) { return constant("NaN", i + 3) }
+    if (c == 'I' and startsAt(i, "Infinity")) { return constant("Infinity", i + 8) }
+    if (c == '-' and startsAt(i, "-Infinity")) { return constant("-Infinity", i + 9) }
+    throw failure("Expecting value", i)
+  }
+
+  private fun constant(name : string, after : int) : any? {
+    end = after
+    if (parseConstant != null and !tree) { return parseConstant!!(name) }
+    val zero = 0.0
+    val x = name == "NaN" ? zero / zero : name == "Infinity" ? 1.0 / zero : -1.0 / zero
+    return tree ? JsonDouble(x) : x
+  }
+
+  // A number as Python's pattern reads one at `i`: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?;
+  // null where there is none.
+  private fun numberAt(i : int) : any? {
+    var j = i
+    if (j < n and text[j] == '-') { j += 1 }
+    if (j >= n or !isDigit(text[j])) { return null }
+    if (text[j] == '0') { j += 1 } else { while (j < n and isDigit(text[j])) { j += 1 } }
+    var whole = true
+    if (j + 1 < n and text[j] == '.' and isDigit(text[j + 1])) {
+      whole = false
+      j += 2
+      while (j < n and isDigit(text[j])) { j += 1 }
+    }
+    if (j < n and (text[j] == 'e' or text[j] == 'E')) {
+      var k = j + 1
+      if (k < n and (text[k] == '+' or text[k] == '-')) { k += 1 }
+      if (k < n and isDigit(text[k])) {
+        whole = false
+        j = k
+        while (j < n and isDigit(text[j])) { j += 1 }
+      }
+    }
+    end = j
+    val digits = text[i ..< j]
+    if (whole) {
+      if (parseInt != null and !tree) { return parseInt!!(digits) }
+      val small = digits.toIntOrNull()
+      if (small != null) { return tree ? JsonInt(small!!) : small }
+      val big = BigInt.parse(digits)
+      return tree ? JsonBigInt(big) : big
+    }
+    if (parseFloat != null and !tree) { return parseFloat!!(digits) }
+    val x = digits.toFloat()
+    return tree ? JsonDouble(x) : x
+  }
+
+  // The string whose opening quote is just before `start`, its escapes read; `end` set to just
+  // past its closing quote.
+  fun stringAt(start : int) : string throws JsonParseException {
+    val begin = start - 1
+    var i = start
+    var chunk = start
+    var sb : StringBuilder? = null
+    while (true) {
+      if (i >= n) { throw failure("Unterminated string starting at", begin) }
+      val c = text[i]
+      if (c != '"' and c != '\\' and c.code >= 0x20) {
+        i += 1
+        continue
+      }
+      if (c == '"') {
+        end = i + 1
+        if (sb == null) { return text[chunk ..< i] }
+        return sb!!.append(text[chunk ..< i]).toString()
+      }
+      if (c == '\\') {
+        if (sb == null) { sb = StringBuilder() }
+        sb!!.append(text[chunk ..< i])
+        if (i + 1 >= n) { throw failure("Unterminated string starting at", begin) }
+        val e = text[i + 1]
+        if (e == 'u') {
+          var code = hexAt(i + 2)
+          if (code < 0) { throw failure("Invalid \\uXXXX escape", i + 1) }
+          i += 6
+          if (code >= 0xD800 and code <= 0xDBFF) {
+            // The first half of a pair: the second, where it follows as a \u escape.
+            var low = -1
+            if (i + 1 < n and text[i] == '\\' and text[i + 1] == 'u') {
+              low = hexAt(i + 2)
+              if (low < 0) { throw failure("Invalid \\uXXXX escape", i + 1) }
+            }
+            if (low >= 0xDC00 and low <= 0xDFFF) {
+              code = 0x10000 + (((code - 0xD800) << 10) | (low - 0xDC00))
+              i += 6
+            } else {
+              code = 0xFFFD
+            }
+          } else if (code >= 0xDC00 and code <= 0xDFFF) {
+            code = 0xFFFD
+          }
+          sb!!.append(code.char)
+        } else {
+          val made = e == '"' ? '"' : e == '\\' ? '\\' : e == '/' ? '/' : e == 'b' ? '\u{08}' : e == 'f' ? '\u{0C}' :
+                     e == 'n' ? '\n' : e == 'r' ? '\r' : e == 't' ? '\t' : '\u{0}'
+          if (made == '\u{0}') { throw failure("Invalid \\escape", i) }
+          sb!!.append(made)
+          i += 2
+        }
+        chunk = i
+      } else {
+        // A control character.
+        if (strict) { throw failure("Invalid control character at", i) }
+        i += 1
+      }
+    }
+  }
+
+  // The four hex digits at `i` as a number; -1 where there are not four.
+  private fun hexAt(i : int) : int {
+    if (i + 4 > n) { return -1 }
+    var code = 0
+    for (k in i ..< i + 4) {
+      val c = text[k]
+      val d = c >= '0' and c <= '9' ? c.code - 48 : c >= 'a' and c <= 'f' ? c.code - 87 : c >= 'A' and c <= 'F' ? c.code - 55 : -1
+      if (d < 0) { return -1 }
+      code = code * 16 + d
+    }
+    return code
+  }
+
+  // The object whose { is just before `start`, as Python's JSONObject reads it.
+  private fun objectAt(start : int) : any? throws JsonParseException {
+    var i = start
+    val keys : open List<string> = []
+    val values : open List<any?> = []
+    if (i >= n or text[i] != '"') {
+      i = skip(i)
+      if (i < n and text[i] == '}') {
+        end = i + 1
+        return made(keys, values)
+      }
+      if (i >= n or text[i] != '"') { throw failure("Expecting property name enclosed in double quotes", i) }
+    }
+    i += 1
+    while (true) {
+      val key = stringAt(i)
+      i = end
+      if (i >= n or text[i] != ':') {
+        i = skip(i)
+        if (i >= n or text[i] != ':') { throw failure("Expecting ':' delimiter", i) }
+      }
+      i = skip(i + 1)
+      val value = valueAt(i)
+      keys.add(key)
+      values.add(value)
+      i = skip(end)
+      if (i < n and text[i] == '}') {
+        end = i + 1
+        return made(keys, values)
+      }
+      if (i >= n or text[i] != ',') { throw failure("Expecting ',' delimiter", i) }
+      val comma = i
+      i = skip(i + 1)
+      if (i >= n or text[i] != '"') {
+        if (i < n and text[i] == '}') { throw failure("Illegal trailing comma before end of object", comma) }
+        throw failure("Expecting property name enclosed in double quotes", i)
+      }
+      i += 1
+    }
+  }
+
+  // An object made of its keys and values, in order, the last of two of one key kept.
+  private fun made(keys : List<string>, values : List<any?>) : any? {
+    if (tree) {
+      val obj = JsonObject()
+      for (k in 0 ..< keys.size) { obj.add(keys[k], values[k] as JsonValue) }
+      return obj
+    }
+    if (objectPairsHook != null) {
+      val pairs : open List<MapEntry<string, any?>> = []
+      for (k in 0 ..< keys.size) { pairs.add(MapEntry(keys[k], values[k])) }
+      return objectPairsHook!!(pairs)
+    }
+    val map : open Map<string, any?> = {:}
+    for (k in 0 ..< keys.size) { map[keys[k]] = values[k] }
+    if (objectHook != null) { return objectHook!!(map) }
+    return map
+  }
+
+  // The array whose [ is just before `start`, as Python's JSONArray reads it.
+  private fun arrayAt(start : int) : any? throws JsonParseException {
+    val items : open List<any?> = []
+    var i = skip(start)
+    if (i < n and text[i] == ']') {
+      end = i + 1
+      return tree ? JsonArray([]) : items
+    }
+    while (true) {
+      items.add(valueAt(i))
+      i = skip(end)
+      if (i < n and text[i] == ']') {
+        end = i + 1
+        if (tree) { return JsonArray(items.map { it as JsonValue }) }
+        return items
+      }
+      if (i >= n or text[i] != ',') { throw failure("Expecting ',' delimiter", i) }
+      val comma = i
+      i = skip(i + 1)
+      if (i < n and text[i] == ']') { throw failure("Illegal trailing comma before end of array", comma) }
+    }
+  }
+
+  // Past the spaces, tabs and line ends at `i`.
+  private fun skip(i : int) : int {
+    var j = i
+    while (j < n) {
+      val c = text[j]
+      if (c != ' ' and c != '\n' and c != '\r' and c != '\t') { break }
+      j += 1
+    }
+    return j
+  }
+
+  private fun isDigit(c : char) : bool => c >= '0' and c <= '9'
+
+  private fun startsAt(at : int, s : string) : bool => at + s.size <= n and text[at ..< at + s.size] == s
+
+  // A JsonParseException for `description` at `at`, as Python's JSONDecodeError gives it.
+  private fun failure(description : string, at : int) : JsonParseException {
+    var line = 1
+    var lineStart = 0
+    var nl = text.indexOf('\n')
+    while (nl >= 0 and nl < at) {
+      line += 1
+      lineStart = nl + 1
+      nl = text.indexOf('\n', nl + 1)
+    }
+    val column = at - lineStart + 1
+    return JsonParseException(description, at, line, column, "$description: line $line column $column (char $at)")
+  }
+}
+
+// ---- Writing ----
+
+// Writes a value as Python's json encoder does. `indent` null for one line, else what each
+// level is indented by.
+class __JsonWriter {
+  val out = StringBuilder()
+  private val indent : string?
+  private val itemSeparator : string
+  private val keySeparator : string
+  private val sortKeys : bool
+  private val ensureAscii : bool
+  private val allowNaN : bool
+  private val skipKeys : bool
+  private val checkCircular : bool
+  private val default : ((any?) -> any?)?
+  // The lists, maps and objects being written, each inside the one before.
+  private val open : open List<any?> = []
+
+  internal fun init(indent : string?, itemSeparator : string, keySeparator : string, sortKeys : bool, ensureAscii : bool,
+                    allowNaN : bool, skipKeys : bool, checkCircular : bool, default : ((any?) -> any?)?) {
+    this.indent = indent
+    this.itemSeparator = itemSeparator
+    this.keySeparator = keySeparator
+    this.sortKeys = sortKeys
+    this.ensureAscii = ensureAscii
+    this.allowNaN = allowNaN
+    this.skipKeys = skipKeys
+    this.checkCircular = checkCircular
+    this.default = default
+  }
+
+  fun write(value : any?, level : int) {
+    if (value == null or value === JsonNull) {
+      out.append("null")
+    } else if (value is string) {
+      quote(value as string)
+    } else if (value is bool) {
+      out.append(value as bool ? "true" : "false")
+    } else if (value is int or value is BigInt) {
+      out.append(value.toString())
+    } else if (value is float) {
+      out.append(number(value as float))
+    } else if (value is char) {
+      quote((value as char).toString())
+    } else if (value is List) {
+      enter(value)
+      writeList(value as List<any?>, level)
+      leave()
+    } else if (value is Map) {
+      enter(value)
+      writeMap(value as Map<any?, any?>, level)
+      leave()
+    } else if (value is JsonValue) {
+      writeTree(value as JsonValue, level)
+    } else if (value is JsonNode) {
+      write((value as JsonNode).toJson(), level)
+    } else {
+      val cls = value#
+      if (cls.entries.isNotEmpty()) {
+        quote(__jsonEntryName(value))
+      } else if (cls.isData) {
+        enter(value)
+        val fields = __jsonFieldsOf(cls)
+        if (sortKeys) {
+          writePairs(fields.map { MapEntry<any?, any?>(it.key, __jsonGet(it, value)) }, level)
+        } else {
+          out.append('{')
+          var first = true
+          for (f in fields) {
+            if (entry(f.key, __jsonGet(f, value), first, level)) { first = false }
+          }
+          close(first, level)
+        }
+        leave()
+      } else if (default != null) {
+        enter(value)
+        write(default!!(value), level)
+        leave()
+      } else {
+        throw IllegalArgumentException("Object of type ${cls.name} is not JSON serializable")
+      }
+    }
+  }
+
+  private fun writeTree(value : JsonValue, level : int) {
+    if (value is JsonObject) {
+      // The keys in keyOrder first, then any the map has besides: as a rule, the map's own order.
+      val obj = value as JsonObject
+      val map = obj.map
+      val keys = obj.keyOrder
+      if (sortKeys) {
+        val pairs : open List<MapEntry<any?, any?>> = []
+        for ((k, v) in map) { pairs.add(MapEntry<any?, any?>(k, v)) }
+        writePairs(pairs, level)
+        return
+      }
+      out.append('{')
+      var first = true
+      var inOrder = keys.size == map.size
+      if (inOrder) {
+        var i = 0
+        for (k in map.keys) {
+          if (keys[i] != k) {
+            inOrder = false
+            break
+          }
+          i += 1
+        }
+      }
+      if (inOrder) {
+        for ((k, v) in map) { if (entry(k, v, first, level)) { first = false } }
+      } else {
+        for (k in keys) { if (k in map.keys and entry(k, map[k], first, level)) { first = false } }
+        for ((k, v) in map) { if (k !in keys and entry(k, v, first, level)) { first = false } }
+      }
+      close(first, level)
+    } else if (value is JsonArray) {
+      writeList((value as JsonArray).list, level)
+    } else if (value is JsonString) {
+      quote((value as JsonString).value)
+    } else if (value is JsonInt) {
+      out.append((value as JsonInt).value.toString())
+    } else if (value is JsonBigInt) {
+      out.append((value as JsonBigInt).value.toString())
+    } else if (value is JsonDouble) {
+      out.append(number((value as JsonDouble).value))
+    } else if (value is JsonBool) {
+      out.append((value as JsonBool).value ? "true" : "false")
+    } else {
+      out.append("null")
+    }
+  }
+
+  private fun writeList(items : List<any?>, level : int) {
+    if (items.isEmpty()) {
+      out.append("[]")
+      return
+    }
+    out.append('[')
+    newLine(level + 1)
+    var first = true
+    for (item in items) {
+      if (!first) {
+        out.append(itemSeparator)
+        newLine(level + 1)
+      }
+      first = false
+      write(item, level + 1)
+    }
+    newLine(level)
+    out.append(']')
+  }
+
+  private fun writeMap(map : Map<any?, any?>, level : int) {
+    if (sortKeys) {
+      val pairs : open List<MapEntry<any?, any?>> = []
+      for ((k, v) in map) { pairs.add(MapEntry<any?, any?>(k, v)) }
+      writePairs(pairs, level)
+      return
+    }
+    out.append('{')
+    var first = true
+    for ((k, v) in map) { if (entry(k, v, first, level)) { first = false } }
+    close(first, level)
+  }
+
+  // An object of `pairs`, sorted where sortKeys says.
+  private fun writePairs(given : List<MapEntry<any?, any?>>, level : int) {
+    val pairs = sortKeys ? sorted(given) : given
+    out.append('{')
+    var first = true
+    for (pair in pairs) { if (entry(pair.key, pair.value, first, level)) { first = false } }
+    close(first, level)
+  }
+
+  // One key and its value in an object, the key made a string as Python makes it one; false
+  // where skipKeys leaves it out.
+  private fun entry(k : any?, value : any?, first : bool, level : int) : bool {
+    var key = ""
+    if (k is string) {
+      key = k as string
+    } else if (k is float) {
+      key = number(k as float)
+    } else if (k is bool) {
+      key = k as bool ? "true" : "false"
+    } else if (k == null) {
+      key = "null"
+    } else if (k is int or k is BigInt) {
+      key = k.toString()
+    } else if (k is char) {
+      key = (k as char).toString()
+    } else if (skipKeys) {
+      return false
+    } else {
+      throw IllegalArgumentException("keys must be string, int, float, bool or null, not ${k#.name}")
+    }
+    if (!first) { out.append(itemSeparator) }
+    newLine(level + 1)
+    quote(key)
+    out.append(keySeparator)
+    write(value, level + 1)
+    return true
+  }
+
+  // An object's end: on a line of its own where it had anything in it and is indented.
+  private fun close(empty : bool, level : int) {
+    if (!empty) { newLine(level) }
+    out.append('}')
+  }
+
+  // Keys sorted as Python sorts them: strings by their characters, numbers by size; keys of
+  // both kinds cannot be.
+  private fun sorted(pairs : List<MapEntry<any?, any?>>) : List<MapEntry<any?, any?>> {
+    if (pairs.all { it.key is string }) { return pairs.sortedBy { it.key as string } }
+    if (pairs.all { it.key is int or it.key is float or it.key is bool }) {
+      return pairs.sortedBy { k -> k.key is bool ? (k.key as bool ? 1.0 : 0.0) : k.key is int ? (k.key as int).toFloat() : k.key as float }
+    }
+    throw IllegalArgumentException("sortKeys: the keys cannot be sorted, being of different kinds")
+  }
+
+  private fun newLine(level : int) {
+    if (indent == null) { return }
+    out.append('\n')
+    for (i in 0 ..< level) { out.append(indent!!) }
+  }
+
+  private fun enter(container : any?) {
+    if (!checkCircular) { return }
+    for (o in open) {
+      if (o === container) { throw IllegalArgumentException("Circular reference detected") }
+    }
+    open.add(container)
+  }
+
+  private fun leave() {
+    if (checkCircular) { open.removeAt(open.size - 1) }
+  }
+
+  private fun number(x : float) : string {
+    if (x.isNaN() or x.isInfinite()) {
+      val text = x.isNaN() ? "NaN" : x > 0.0 ? "Infinity" : "-Infinity"
+      if (!allowNaN) { throw IllegalArgumentException("Out of range float values are not JSON compliant: " + __reprFloat(x)) }
+      return text
+    }
+    return __reprFloat(x)
+  }
+
+  // A string in quotes, as Python escapes it: " \ and the control characters always, and with
+  // ensureAscii every character past ASCII too, as \uXXXX (two of them past U+FFFF).
+  private fun quote(s : string) {
+    out.append('"')
+    // Most strings need nothing escaped: written whole.
+    if (!(ensureAscii ? __jsonEscapedAscii : __jsonEscaped).containsMatchIn(s)) {
+      out.append(s).append('"')
+      return
+    }
+    var chunk = 0
+    for (i in 0 ..< s.size) {
+      val c = s[i]
+      val code = c.code
+      if (code >= 0x20 and c != '"' and c != '\\' and (code < 0x7F or !ensureAscii)) { continue }
+      out.append(s[chunk ..< i])
+      chunk = i + 1
+      if (c == '"') { out.append("\\\"") }
+      else if (c == '\\') { out.append("\\\\") }
+      else if (c == '\n') { out.append("\\n") }
+      else if (c == '\r') { out.append("\\r") }
+      else if (c == '\t') { out.append("\\t") }
+      else if (code == 0x08) { out.append("\\b") }
+      else if (code == 0x0C) { out.append("\\f") }
+      else if (code < 0x10000) { hex(code) }
+      else {
+        val v = code - 0x10000
+        hex(0xD800 | ((v >> 10) & 0x3FF))
+        hex(0xDC00 | (v & 0x3FF))
+      }
+    }
+    out.append(s[chunk ..< s.size])
+    out.append('"')
+  }
+
+  private fun hex(code : int) {
+    out.append("\\u")
+    val digits = "0123456789abcdef"
+    out.append(digits[(code >> 12) & 15]).append(digits[(code >> 8) & 15]).append(digits[(code >> 4) & 15]).append(digits[code & 15])
+  }
+}
+
+// ---- Data classes and enums ----
+
+// A field of a data class as JSON has it: its key, and the field.
+data __JsonFieldPlan(val key : string, val field : Field, val parameter : Parameter, val skip : bool)
+
+// The fields of a data class's header, in their order, as JSON reads and writes them; worked
+// out once for each class.
+val __jsonPlans : open Map<string, List<__JsonFieldPlan>> = {:}
+
+fun __jsonPlanOf(cls : Class) : List<__JsonFieldPlan> {
+  val id = cls.origin + ":" + cls.name
+  val known = __jsonPlans[id]
+  if (known != null) { return known!! }
+  val plan : open List<__JsonFieldPlan> = []
+  if (cls.constructors.isNotEmpty()) {
+    val fields = cls.fields
+    for (p in cls.constructors[0].parameters) {
+      val f = fields.firstOrNull { it.name == p.name }
+      if (f == null) { continue }
+      val note = p.annotation<JsonField>() ?: f!!.annotation<JsonField>()
+      val key = note != null and note!!.name.isNotEmpty() ? note!!.name : p.name
+      plan.add(__JsonFieldPlan(key, f!!, p, note?.skip ?: false))
+    }
+  }
+  __jsonPlans[id] = plan
+  return plan
+}
+
+// The fields written: those not left out.
+fun __jsonFieldsOf(cls : Class) : List<__JsonFieldPlan> => __jsonPlanOf(cls).filter { !it.skip }
+
+// A field's value, read through reflection; what its getter throws, an IllegalStateException
+// saying which field it was.
+fun __jsonGet(f : __JsonFieldPlan, obj : any?) : any? {
+  try {
+    return f.field.get(obj)
+  } catch (e : InvocationTargetException) {
+    throw IllegalStateException("${f.field.name} could not be read for JSON: ${e.cause?.message}", e.cause)
+  }
+}
+
+// An enum entry's name.
+fun __jsonEntryName(entry : any?) : string => entry.toString()
+
+// Whether a class is JsonValue or one of its kinds.
+fun __jsonIsTree(cls : Class) : bool {
+  var c : Class? = cls
+  while (c != null) {
+    if (c!!.name == "JsonValue" and c!!.origin == "ww") { return true }
+    c = c!!.superclass
+  }
+  return false
+}
+
+// What a plain value read is, for a message: "string", "int", "object".
+fun __jsonKindOf(value : any?) : string {
+  if (value == null) { return "null" }
+  if (value is Map or value is JsonObject) { return "object" }
+  if (value is List or value is JsonArray) { return "array" }
+  if (value is BigInt) { return "int" }
+  return value#.name
+}
+
+// A word with "a" or "an" before it, for a message: "an int", "a string".
+fun __jsonA(word : string) : string => (word.isNotEmpty() and "aeiouAEIOU".contains(word[0]) ? "an " : "a ") + word
+
+// A plain value read made into `cls`, as Json.read<T> does; `path` is where it is, for a message.
+fun __jsonConvert(value : any?, cls : Class, path : string) : any? throws JsonParseException {
+  val name = cls.name
+  if (name == "any") { return value }
+  if (value == null) {
+    if (cls.isInstance(null)) { return null }
+    throw JsonParseException("$path: null where " + __jsonA(name) + " is wanted")
+  }
+  fun wrong() : JsonParseException => JsonParseException("$path: " + __jsonA(__jsonKindOf(value)) + " where " + __jsonA(name) + " is wanted")
+  if (cls.origin == "ww") {
+    if (name == "int") {
+      if (value is int) { return value }
+      throw wrong()
+    }
+    if (name == "float") {
+      if (value is float) { return value }
+      if (value is int) { return (value as int).toFloat() }
+      throw wrong()
+    }
+    if (name == "BigInt") {
+      if (value is BigInt) { return value }
+      if (value is int) { return BigInt.of(value as int) }
+      throw wrong()
+    }
+    if (name == "string" or name == "bool") {
+      if (cls.isInstance(value)) { return value }
+      throw wrong()
+    }
+    if (name == "List" or name == "Set") {
+      if (value !is List) { throw wrong() }
+      val item = cls.typeArguments.isEmpty() ? null : cls.typeArguments[0]
+      val items : open List<any?> = []
+      var i = 0
+      for (v in value as List<any?>) {
+        items.add(item == null ? v : __jsonConvert(v, item!!, "$path[$i]"))
+        i += 1
+      }
+      return __jsonMade(cls, items)
+    }
+    if (name == "Map") {
+      if (value !is Map) { throw wrong() }
+      val keyClass = cls.typeArguments.isEmpty() ? null : cls.typeArguments[0]
+      val valueClass = cls.typeArguments.isEmpty() ? null : cls.typeArguments[1]
+      val keys : open List<any?> = []
+      val values : open List<any?> = []
+      for ((k, v) in value as Map<string, any?>) {
+        keys.add(keyClass == null ? k : __jsonKey(k, keyClass!!, path))
+        values.add(valueClass == null ? v : __jsonConvert(v, valueClass!!, "$path.$k"))
+      }
+      return __jsonMadeMap(cls, keys, values)
+    }
+  }
+  if (cls.isInstance(value) and !cls.isData) { return value }
+  val entries = cls.entries
+  if (entries.isNotEmpty()) {
+    if (value !is string) { throw wrong() }
+    val entry = entries.firstOrNull { it.toString() == value }
+    if (entry == null) { throw JsonParseException("$path: \"$value\" is not one of ${name}'s entries, ${entries.join(", ")}") }
+    return entry
+  }
+  if (cls.isData) {
+    if (value !is Map) { throw wrong() }
+    val obj = value as Map<string, any?>
+    val arguments : open Map<string, any?> = {:}
+    for (f in __jsonPlanOf(cls)) {
+      if (f.skip or f.key !in obj.keys) {
+        if (!f.parameter.isOptional) { throw JsonParseException("$path: the object has no \"${f.key}\", which " + __jsonA(name) + " needs") }
+        continue
+      }
+      arguments[f.parameter.name] = __jsonConvert(obj[f.key], f.parameter.type, "$path.${f.key}")
+    }
+    try {
+      return cls.constructors[0].callBy(arguments)
+    } catch (e : InvocationTargetException) {
+      throw JsonParseException("$path: " + __jsonA(name) + " could not be made: ${e.cause?.message}")
+    }
+  }
+  throw JsonParseException("$path: " + __jsonA(name) + " is not read from JSON: data classes, enums, lists, sets, maps and plain values are")
+}
+
+// A map's key, read as a string, made into `cls`: a string as it is, a number or an enum's
+// entry from its text.
+fun __jsonKey(key : string, cls : Class, path : string) : any? throws JsonParseException {
+  if (cls.name == "string" or cls.name == "any") { return key }
+  if (cls.name == "int") {
+    val i = key.toIntOrNull()
+    if (i != null) { return i }
+  } else if (cls.name == "float") {
+    val f = key.toFloatOrNull()
+    if (f != null) { return f }
+  } else if (cls.entries.isNotEmpty()) {
+    val entry = cls.entries.firstOrNull { it.toString() == key }
+    if (entry != null) { return entry }
+  }
+  throw JsonParseException("$path: the key \"$key\" where " + __jsonA(cls.name) + " is wanted")
+}
+
+// A list or set of the class's type, of `items`.
+fun __jsonMade(cls : Class, items : List<any?>) : any? {
+  if (cls.name == "Set") {
+    val set = __typeNewSet(cls.type)
+    for (item in items) { set.add(item) }
+    return set
+  }
+  val list = __typeNewList(cls.type)
+  for (item in items) { list.add(item) }
+  return list
+}
+
+// A map of the class's type, of `keys` and `values`.
+fun __jsonMadeMap(cls : Class, keys : List<any?>, values : List<any?>) : any? {
+  val made = __typeNewMap(cls.type)
+  for (i in 0 ..< keys.size) { made[keys[i]] = values[i] }
+  return made
+}
+
+// ---- Floats ----
+
+// A float as Python's repr() writes it, and JSON with it: the fewest digits that read back as
+// it, positional from 1e-4 up to 1e16 (".0" after a whole one, unless `addDotZero` is false),
+// in exponent form past them ("1e-05", "1e+16"); "nan", "inf" and "-inf" for the rest.
+fun __reprFloat(x : float, addDotZero : bool = true) : string {
+  if (x.isNaN()) { return "nan" }
+  if (x.isInfinite()) { return x > 0.0 ? "inf" : "-inf" }
+  // WinterWolf writes the shortest digits too, in a form of its own: those digits, and where
+  // the point goes, read back from it.
+  var text = x.toString()
+  val negative = text.startsWith("-")
+  if (negative) { text = text[1 ..< text.size] }
+  var exponent = 0
+  val e = text.indexOf('e')
+  if (e >= 0) {
+    exponent = text[e + 1 ..< text.size].toInt()
+    text = text[0 ..< e]
+  }
+  val dot = text.indexOf('.')
+  var digits = dot >= 0 ? text[0 ..< dot] + text[dot + 1 ..< text.size] : text
+  var point = (dot >= 0 ? dot : text.size) + exponent   // the digits' point: digits[0 ..< point] is the whole part
+  var lead = 0
+  while (lead < digits.size - 1 and digits[lead] == '0') { lead += 1 }
+  digits = digits[lead ..< digits.size]
+  point -= lead
+  var end = digits.size
+  while (end > 1 and digits[end - 1] == '0') { end -= 1 }
+  digits = digits[0 ..< end]
+  if (digits == "0") { return (negative ? "-" : "") + (addDotZero ? "0.0" : "0") }
+  if (digits.size > 17) {
+    // WinterWolf wrote every digit of a large whole number: the fewest that read back as it.
+    val target = negative ? -x : x
+    for n in 1..17 {
+      var kept = digits[0 ..< n]
+      if (digits[n] >= '5') {
+        // Rounded up, a carry going left; 999 becoming 1000 moves the point.
+        val chars = kept.toList().toOpenList()
+        var i = n - 1
+        while (i >= 0 and chars[i] == '9') {
+          chars[i] = '0'
+          i -= 1
+        }
+        if (i < 0) {
+          chars.add(0, '1')
+        } else {
+          chars[i] = (chars[i].code + 1).char
+        }
+        kept = chars.join("")
+      }
+      val shift = kept.size - n
+      val back = ("0." + kept + "e" + (point + shift).toString()).toFloatOrNull()
+      if (back != null and back!! == target) {
+        point += shift
+        var e2 = kept.size
+        while (e2 > 1 and kept[e2 - 1] == '0') { e2 -= 1 }
+        digits = kept[0 ..< e2]
+        break
+      }
+    }
+  }
+  val sb = StringBuilder()
+  if (negative) { sb.append('-') }
+  if (point <= -4 or point > 16) {
+    // d.ddde+XX
+    sb.append(digits[0])
+    if (digits.size > 1) {
+      sb.append('.')
+      sb.append(digits[1 ..< digits.size])
+    }
+    val exp = point - 1
+    sb.append(exp < 0 ? "e-" : "e+")
+    val magnitude = Math.abs(exp)
+    if (magnitude < 10) { sb.append('0') }
+    sb.append(magnitude.toString())
+  } else if (point <= 0) {
+    sb.append("0.")
+    for (i in 0 ..< -point) { sb.append('0') }
+    sb.append(digits)
+  } else if (point >= digits.size) {
+    sb.append(digits)
+    for (i in 0 ..< point - digits.size) { sb.append('0') }
+    if (addDotZero) { sb.append(".0") }
+  } else {
+    sb.append(digits[0 ..< point])
+    sb.append('.')
+    sb.append(digits[point ..< digits.size])
+  }
+  return sb.toString()
+}

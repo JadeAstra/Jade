@@ -1,0 +1,196 @@
+// The JSON tree (JadeLib's jadelib-json, as ported): its tests, JsonValueTest, JsonNodeTest,
+// JsonDiffTest and JsonParseStrictnessTest, each check one line. Where reading now follows
+// Python's, the line says what it gives instead.
+
+// -- Numbers: whole ones JsonInt, the rest JsonDouble --
+print(toJsonVal("42") is JsonInt, (toJsonVal("42") as JsonInt).value, toJsonVal("3.5"), toJsonVal("1e3"), toJsonVal("-7"))   // expect: true 42 3.5 1000.0 -7
+print(toJsonVal("1e3") is JsonDouble, toJsonVal("-7") is JsonInt)   // expect: true true
+
+// -- Objects, round trips and the two ways of writing --
+val ab = toJsonObj("{\"a\":1,\"b\":\"x\"}")
+print(ab.intValue("a"), ab.stringValue("b"))   // expect: 1 x
+val parsed = toJsonObj("{\"i\":1,\"d\":1.5,\"s\":\"hello\",\"b\":true,\"n\":null,\"arr\":[1,2,3]}")
+print(diffJson(parsed, toJsonObj(toJsonText(parsed))).isEmpty())   // expect: true
+val one = toJsonVal("{\"a\":1}")
+print(toJsonText(one) == one.toJsonText(), toJsonObj("{\"a\":1,\"b\":2}").toJsonText(prettyPrint = false).contains('\n'))   // expect: true false
+print(toJsonText(parsed))
+// expect: {
+// expect:     "i": 1,
+// expect:     "d": 1.5,
+// expect:     "s": "hello",
+// expect:     "b": true,
+// expect:     "n": null,
+// expect:     "arr": [
+// expect:         1,
+// expect:         2,
+// expect:         3
+// expect:     ]
+// expect: }
+
+// -- A whole float keeps its .0, and reads back as a float --
+val d = JsonObject()
+d["d"] = 5.0
+print(d.toJsonText(prettyPrint = false), toJsonObj(d.toJsonText(prettyPrint = false)).map["d"] is JsonDouble)   // expect: {"d":5.0} true
+
+// -- Escapes, both ways --
+val raw = "quote:\" backslash:\\ newline:\n tab:\t"
+val s = JsonObject()
+s["s"] = raw
+val sText = s.toJsonText()
+print(sText.contains("\\\""), sText.contains("\\\\"), sText.contains("\\n"), sText.contains("\\t"), toJsonObj(sText).stringValue("s") == raw)   // expect: true true true true true
+print(toJsonObj("{\"s\":\"A\\u00e9\"}").stringValue("s") == "A\u{E9}")   // expect: true
+val ctl = JsonObject()
+ctl["s"] = "\u{01}"
+print(ctl.toJsonText().contains("\\u0001"), toJsonObj(ctl.toJsonText()).stringValue("s") == "\u{01}")   // expect: true true
+
+// -- Keys in the order set; typed setters; null takes a key out --
+val order = JsonObject()
+order["z"] = 1
+order["a"] = 2
+order["m"] = 3
+print(order.toJsonText(prettyPrint = false))   // expect: {"z":1,"a":2,"m":3}
+val typed = JsonObject()
+typed["int"] = 5
+typed["dbl"] = 2.5
+typed["str"] = "hi"
+typed["bool"] = true
+typed["nul"] = null
+print(typed.map["int"] is JsonInt, typed.map["dbl"] is JsonDouble, typed.map["str"] is JsonString, typed.map["bool"] is JsonBool, typed.map["nul"] === JsonNull)   // expect: true true true true true
+val gone = JsonObject()
+gone["a"] = 1
+gone["b"] = "x"
+val noInt : int? = null
+val noString : string? = null
+gone["a"] = noInt
+gone["b"] = noString
+print(gone.map["a"], gone.map["b"])   // expect: null null
+val nestedHost = JsonObject()
+val nested = JsonArray([JsonInt(1), JsonInt(2)])
+nestedHost["arr"] = nested
+print(nestedHost.map["arr"] == nested)   // expect: true
+val noValue : JsonValue? = null
+nestedHost["arr"] = noValue
+print(nestedHost.map["arr"])   // expect: null
+val built : open Map<string, JsonValue> = {:}
+built["b"] = JsonInt(2)
+built["a"] = JsonInt(1)
+print(JsonObject(built, ["a", "b"]).toJsonText(prettyPrint = false))   // expect: {"a":1,"b":2}
+
+// -- Reading values out --
+val seven = toJsonObj("{\"a\":7}")
+print(seven.intValue("a"), seven.intValue("a", 99), seven.intValue("missing", 99))   // expect: 7 7 99
+try { seven.intValue("nope") } catch (e : IllegalStateException) { print(e.message) }   // expect: missing key 'nope'
+val mixed = toJsonObj("{\"d\":1.5,\"s\":\"x\",\"arr\":[1,2],\"obj\":{\"k\":3}}")
+print(mixed.doubleValue("d"), mixed.stringValue("s"), mixed.arrayValue("arr")!!.size, mixed.objectValue("obj").intValue("k"), seven.arrayValue("missing"))   // expect: 1.5 x 2 3 null
+print(JsonInt(5).toInt(), JsonInt(5).toFloat(), JsonDouble(2.5).toFloat(), JsonDouble(3.9).toInt(), JsonString("hi").stringValue(), JsonString("8").toInt(), JsonString("8.5").toFloat())   // expect: 5 5.0 2.5 3 hi 8 8.5
+try { JsonInt(1).stringValue() } catch (e : IllegalStateException) { print(e.message) }   // expect: not a string: JsonInt
+try { JsonBool(true).toInt() } catch (e : NumberFormatException) { print(e.message) }   // expect: not a number: JsonBool
+val arrObj = toJsonObj("{\"arr\":[10,20,30],\"k\":\"v\"}")
+print((arrObj["k"] as JsonString).value, (arrObj["arr"]!![1] as JsonInt).value, seven["a"]!![0], JsonInt(1)["key"])   // expect: v 20 null null
+print(toJsonVal("true").toBool(), toJsonVal("false").toBool(), JsonInt(1).toBool())   // expect: true false null
+print(toJsonVal("[1, 2.5, 3]").toFloatArray(), JsonInt(1).toFloatArray())   // expect: [1.0, 2.5, 3.0] null
+class Leaf(val name : string) : JsonNode() {
+  override fun toString() : string => name
+}
+val leaves = [Leaf("a"), Leaf("b"), Leaf("c")]
+print(JsonArray([JsonInt(0), JsonInt(2), JsonInt(99)]).toListFromIndexList(leaves), JsonInt(1).toListFromIndexList(leaves))   // expect: [a, c] null
+print(JsonInt(3).asIntOrNull(), JsonDouble(3.9).asIntOrNull(), JsonString("x").asIntOrNull(), JsonBool(true).asIntOrNull())   // expect: 3 3 null null
+print(JsonInt(3).asDoubleOrNull(), JsonDouble(3.5).asDoubleOrNull(), JsonString("x").asDoubleOrNull())   // expect: 3.0 3.5 null
+val arr = toJsonVal("[1,2,3]") as JsonArray
+var sum = 0
+for (e in arr) { sum += (e as JsonInt).value }
+print(sum, arr.list.size, arr.list.map { (it as JsonInt).value })   // expect: 6 3 [1, 2, 3]
+
+// -- Keys escaped as values are, so that any key reads back --
+val q = JsonObject()
+q["say \"hi\""] = 1
+print(q.toJsonText(prettyPrint = false))   // expect: {"say \"hi\"":1}
+val bs = JsonObject()
+bs["C:\\Users"] = 1
+print(bs.toJsonText(prettyPrint = false))   // expect: {"C:\\Users":1}
+val cc = JsonObject()
+cc["new\nline"] = 1
+cc["bell\u{07}"] = 2
+print(cc.toJsonText(prettyPrint = false))   // expect: {"new\nline":1,"bell\u0007":2}
+val awkward = ["say \"hi\"", "C:\\Users\\x", "new\nline", "tab\there", "ret\rurn", "bell\u{07}", "", "plain"]
+val keyed = JsonObject()
+for (i in awkward.indices) { keyed[awkward[i]] = i }
+val reparsed = toJsonVal(keyed.toJsonText(prettyPrint = false)) as JsonObject
+print(reparsed.map.keys.toList() == awkward, awkward.indices.all { (reparsed.map[awkward[it]] as JsonInt).value == it })   // expect: true true
+val quoted = JsonObject()
+quoted["a\"b"] = 1
+print((toJsonVal(quoted.toJsonText(prettyPrint = true)) as JsonObject).map.keys.toList() == ["a\"b"])   // expect: true
+val plainKey = JsonObject()
+plainKey["plain_key-123"] = 1
+print(plainKey.toJsonText(prettyPrint = false))   // expect: {"plain_key-123":1}
+
+// -- JsonNode and JsonNodeFactory --
+class Vec(var x : int = 0, var y : float = 0.0, var label : string = "") : JsonNode() {
+  override fun toJson(value : JsonObject) {
+    value["x"] = x
+    value["y"] = y
+    value["label"] = label
+  }
+  override fun fromJson(obj : JsonValue) {
+    x = obj["x"]!!.toInt()
+    y = obj["y"]!!.toFloat()
+    label = obj["label"]!!.stringValue()
+  }
+}
+object VecFactory : JsonNodeFactory<Vec>() {
+  override fun newFromJson(obj : JsonValue) : Vec => Vec(obj["x"]!!.toInt(), obj["y"]!!.toFloat(), obj["label"]!!.stringValue())
+}
+val v = Vec(3, 1.5, "hi")
+val vJson = v.toJson()
+print(vJson is JsonObject, (vJson as JsonObject).intValue("x"), (vJson as JsonObject).stringValue("label"))   // expect: true 3 hi
+val v2 = Vec()
+v2.fromJson(toJsonText(vJson))
+print(v2.x, v2.y, v2.label)   // expect: 3 1.5 hi
+val fText = toJsonText(Vec(7, 2.0, "f").toJson())
+print(VecFactory.newFromJson(fText).x, VecFactory.newFromJson(fText).label, VecFactory.newFromJson(toJsonVal(fText)).x)   // expect: 7 f 7
+val host = Vec()
+val nodes = host.jsonList([Vec(1, 0.0, "a"), Vec(2, 0.0, "b")])
+print(nodes.list.size, (nodes.list[0] as JsonObject).intValue("x"), (nodes.list[1] as JsonObject).stringValue("label"))   // expect: 2 1 b
+val noInts : List<int>? = null
+val noFloats : List<float>? = null
+print(host.jsonList([1, 2, 3]), host.jsonList([1.5, 2.5]), host.jsonList(noInts), host.jsonList(noFloats))   // expect: [1,2,3] [1.5,2.5] null null
+val noMap : Map<string, int>? = null
+print(host.jsonMap({"a": 1, "b": 2})!!.intValue("b"), host.jsonMap(noMap))   // expect: 2 null
+val va = Vec(1)
+val vb = Vec(2)
+val vc = Vec(3)
+val stranger = Vec(9)
+print(host.jsonListByIndex([vc, va, stranger], [va, vb, vc]))   // expect: [2,0]
+print(host.jsonListByIndex([vc, va], [va, vb, vc]).toListFromIndexList([va, vb, vc]) == [vc, va])   // expect: true
+val holder = JsonObject()
+holder["vec"] = Vec(5, 0.0, "z")
+print(holder.objectValue("vec").intValue("x"))   // expect: 5
+class Bare : JsonNode()
+try { Bare().toJson() } catch (e : NotImplementedError) { print(e.message) }   // expect: override toJson() in extending class Bare
+
+// -- diffJson --
+print(diffJson(toJsonObj("{\"a\":1,\"b\":[1,2],\"c\":{\"d\":\"x\"}}"), toJsonObj("{\"a\":1,\"b\":[1,2],\"c\":{\"d\":\"x\"}}")))   // expect: []
+print(diffJson(toJsonObj("{\"a\":1}"), toJsonObj("{\"a\":2}")))   // expect: [ValueChanged(path="/a", old=1, new=2)]
+print(diffJson(toJsonObj("{\"a\":1,\"b\":2}"), toJsonObj("{\"a\":1}")))   // expect: [MissingInNew(path="/b", old=2)]
+print(diffJson(toJsonObj("{\"a\":1}"), toJsonObj("{\"a\":1,\"c\":3}")))   // expect: [MissingInOld(path="/c", new=3)]
+print(diffJson(toJsonObj("{\"arr\":[1,2,3]}"), toJsonObj("{\"arr\":[1,9,3]}")))   // expect: [ValueChanged(path="/arr[1]", old=2, new=9)]
+print(diffJson(toJsonVal("[1,2,3]"), toJsonVal("[1,2]")))   // expect: [MissingInNew(path="[2]", old=3)]
+print(diffJson(JsonInt(1), JsonDouble(1.0)))   // expect: [ValueChanged(path="", old=1, new=1.0)]
+print(jsonValuesEqual(JsonInt(1), JsonInt(1)), jsonValuesEqual(JsonDouble(1.0), JsonDouble(1.0)), jsonValuesEqual(JsonString("a"), JsonString("a")),
+      jsonValuesEqual(JsonBool(true), JsonBool(true)), jsonValuesEqual(JsonNull, JsonNull))   // expect: true true true true true
+print(jsonValuesEqual(JsonInt(1), JsonDouble(1.0)), jsonValuesEqual(JsonInt(1), JsonInt(2)), jsonValuesEqual(JsonString("a"), JsonString("b")),
+      jsonValuesEqual(JsonBool(true), JsonBool(false)))   // expect: false false false false
+
+// -- Strictness: refused as before, in Python's words now --
+for (bad in ["{\"a\":1} {\"b\":2}", "{\"a\":1} THIS IS NOT JSON", "{\"a\":", "\"abc\\", "\"\\uZZZZ\"", "1.2.3"]) {
+  try { toJsonVal(bad) } catch (e : JsonParseException) { print(e.message, e is IllegalStateException) }
+}
+// expect: Extra data: line 1 column 9 (char 8) true
+// expect: Extra data: line 1 column 9 (char 8) true
+// expect: Expecting value: line 1 column 6 (char 5) true
+// expect: Unterminated string starting at: line 1 column 1 (char 0) true
+// expect: Invalid \uXXXX escape: line 1 column 3 (char 2) true
+// expect: Extra data: line 1 column 4 (char 3) true
+print(toJsonVal("{\"a\":1}   \n\t"), toJsonVal("[1, {\"b\": [true, null]}]"))   // expect: {a:1} [1,{b:[true,null]}]
+// A whole number too large for an int, refused before, is read as Python reads it.
+print(toJsonVal("99999999999999999999") is JsonBigInt, toJsonVal("99999999999999999999"))   // expect: true 99999999999999999999

@@ -1,0 +1,134 @@
+// Json.read and Json.write against CPython's json module: every text of json_cases/reads.json
+// read as it reads it (the value, or the error with its message and place), every value below
+// written as it writes it, with each option (json_cases/*.expected, made by
+// tools/json/cpython.py). Then what WinterWolf adds: data classes, enums and typed reading.
+
+fun lines(text : string) : List<string> => text.replace("\r\n", "\n").trimEnd().split("\n")
+
+fun compare(what : string, expected : List<string>, got : List<string>) {
+  if (expected == got) {
+    print(what, "as CPython's")
+    return
+  }
+  for (i in 0 ..< Math.max(expected.size, got.size)) {
+    val e = i < expected.size ? expected[i] : "(none)"
+    val g = i < got.size ? got[i] : "(none)"
+    if (e != g) {
+      print(what, "differs at line ${i + 1}:\n  cpython: $e\n  ww:      $g")
+      return
+    }
+  }
+}
+
+// -- Reading, as CPython reads --
+val reads = Json.read<List<string>>(FilePath("json_cases/reads.json").readText())
+val readOut : open List<string> = []
+for (r in reads) {
+  try {
+    readOut.add("ok " + Json.write(Json.read(r)))
+  } catch (e : JsonParseException) {
+    readOut.add("err " + e.message)
+  }
+}
+compare("reads:", lines(FilePath("json_cases/reads.expected").readText()), readOut)   // expect: reads: as CPython's
+
+// -- Writing, as CPython writes --
+val writeOut : open List<string> = []
+fun out(vararg parts : any?) { writeOut.add(parts.join(" ")) }
+val two = BigInt.of(2)
+val writes : List<any?> = [
+  null, true, 1, 0, 1.0, -0.0, 0.1, 1e-5, 1e16, 1e15, 123456789.0, 1.5e300, 5e-324, two.pow(64), -(two.pow(70)),
+  "a\"b\\c\n\t\u{08}\u{0C}\r\u{01}\u{7F}", "\u{E9}\u{20AC}\u{1F600}",
+  [], {:}, [1, [2, []], {:}], {"b": 1, "a": [1, 2], "c": {"d": null}}, {1: "x", 2.5: "y", false: "z", null: "w"},
+  [1e22, 1e21, 1e-4, 1e-5, 0.0001234, 1234567.125], {"z": {"y": [{"x": 1}, []]}, "a": {:}}
+]
+for (w in writes) {
+  val plain = w !is Map or (w as Map<any?, any?>).keys.all { it is string }
+  out("w", Json.write(w), "|", Json.write(w, ensureAscii = false), "|", Json.write(w, indent = 2), "|",
+      plain ? Json.write(w, itemSeparator = ",", keySeparator = ":", sortKeys = true) : "-", "|",
+      plain ? Json.write(w, indent = "\t", sortKeys = true) : "-")
+}
+val zero = 0.0
+out("nan", Json.write([zero / zero, 1.0 / zero, -1.0 / zero]))
+for (bad in [zero / zero, 1.0 / zero, -1.0 / zero]) {
+  try { Json.write(bad, allowNaN = false) } catch (e : IllegalArgumentException) { out("nanerr", e.message) }
+}
+data Spot(val x : int, val y : int)
+val odd : open Map<any, int> = {:}
+odd[Spot(1, 2)] = 1
+odd["a"] = 2
+out("skip", Json.write(odd, skipKeys = true))
+out("default", Json.write(setOf(2, 1), default = { o -> (o as Set<int>).sorted() }))
+val loop : open List<any?> = []
+loop.add(loop)
+try { Json.write(loop) } catch (e : IllegalArgumentException) { out("circ", e.message) }
+out("indent0", Json.write([1, {"a": 2}], indent = 0))
+out("indentneg", Json.write([1, {"a": 2}], indent = -3))
+out("sortnums", Json.write({10: 1, 2: 2, 1: 3}, sortKeys = true))
+out("seps", Json.write({"a": [1, 2]}, itemSeparator = " ; ", keySeparator = " = "))
+out("seps indent", Json.write({"a": [1, 2]}, indent = 1, itemSeparator = " ; ", keySeparator = " = "))
+compare("writes:", lines(FilePath("json_cases/writes.expected").readText()), lines(writeOut.join("\n")))   // expect: writes: as CPython's
+
+// -- Where it is not Python's: half a pair of surrogates, which a string cannot hold, reads as U+FFFD --
+print(Json.read("\"\\ud834\\u0041\"") == "\u{FFFD}A", Json.read("\"\\ude00x\"") == "\u{FFFD}x", Json.read("[\"\\ud834\"]") == ["\u{FFFD}"])   // expect: true true true
+
+// -- The error's parts --
+try {
+  Json.read("[1,\n  2,\n  x]")
+} catch (e : JsonParseException) {
+  print(e.description, e.position, e.line, e.column, e is IllegalStateException)   // expect: Expecting value 11 3 3 true
+}
+
+// -- Python's options for reading --
+print(Json.read("\"a\tb\"", strict = false) == "a\tb")   // expect: true
+print(Json.read("{\"a\": 1, \"a\": 2, \"b\": [1.5]}", objectPairsHook = { pairs -> pairs.map { "${it.key}=${it.value}" } }))   // expect: ["a=1", "a=2", "b=[1.5]"]
+print(Json.read("{\"x\": {\"y\": 1}}", objectHook = { m -> m.keys.join("+") }))   // expect: x
+print(Json.read("[1, 2.5, 3e2, NaN, -Infinity]", parseInt = { "i$it" }, parseFloat = { "f$it" }, parseConstant = { "c$it" }))   // expect: ["i1", "f2.5", "f3e2", "cNaN", "c-Infinity"]
+val found = Json.rawDecode("[1, 2] tail")
+print(found.value, found.end, Json.rawDecode("xx 7 yy", 3))   // expect: [1, 2] 6 JsonRead(value=7, end=4)
+try { Json.rawDecode(" 1") } catch (e : JsonParseException) { print(e.message) }   // expect: Expecting value: line 1 column 1 (char 0)
+
+// -- Values read: whole numbers past an int are BigInts, the rest ints --
+val big = Json.read("[9223372036854775807, 9223372036854775808, -0]") as List<any?>
+print(big[0] is int, big[1] is BigInt, big[1], big[2] is int)   // expect: true true 9223372036854775808 true
+
+// -- Data classes and enums, written and read --
+enum Mood { calm, cross }
+data Tag(val name : string, val weight : float = 1.0)
+data Row(@JsonField("row_id") val id : int, val label : string, val tags : List<Tag> = [], val mood : Mood = Mood.calm,
+         val scores : Map<string, int> = {:}, val note : string? = null, @JsonField(skip = true) val cache : int = -1)
+val row = Row(7, "seven", [Tag("a"), Tag("b", 2.5)], Mood.cross, {"x": 1}, null, 99)
+val text = Json.write(row)
+print(text)   // expect: {"row_id": 7, "label": "seven", "tags": [{"name": "a", "weight": 1.0}, {"name": "b", "weight": 2.5}], "mood": "cross", "scores": {"x": 1}, "note": null}
+val back = Json.read<Row>(text)
+print(back, back == Row(7, "seven", [Tag("a"), Tag("b", 2.5)], Mood.cross, {"x": 1}, null))   // expect: Row(id=7, label="seven", tags=[Tag(name="a", weight=1.0), Tag(name="b", weight=2.5)], mood=cross, scores={"x": 1}, note=null, cache=-1) true
+print(Json.read<Row>("{\"row_id\": 1, \"label\": \"one\", \"extra\": true}"))   // expect: Row(id=1, label="one", tags=[], mood=calm, scores={}, note=null, cache=-1)
+print(Json.read<List<Tag>>("[{\"name\": \"x\", \"weight\": 2}]"), Json.read<Map<string, Mood>>("{\"a\": \"calm\"}"))   // expect: [Tag(name="x", weight=2.0)] {"a": calm}
+print(Json.read<Map<int, string>>(Json.write({1: "one", 20: "twenty"})), Json.read<Set<int>>("[3, 1, 3]"), Json.read<Mood?>("null"))   // expect: {1: "one", 20: "twenty"} {3, 1} null
+print(Json.write(Mood.calm), Json.write([Mood.cross]), jsonValueOf(Tag("t")).toJsonText(prettyPrint = false))   // expect: "calm" ["cross"] {"name":"t","weight":1.0}
+print(Json.read<JsonObject>("{\"a\": [1, 2.0]}").toJsonText(prettyPrint = false), Json.read<int>("5"), Json.read<float>("5"), Json.read<BigInt>("5"))   // expect: {"a":[1,2.0]} 5 5.0 5
+
+// -- What does not fit the type, with where it is --
+for (bad in ["{\"row_id\": \"x\", \"label\": \"a\"}", "{\"label\": \"a\"}", "{\"row_id\": 1, \"label\": \"a\", \"mood\": \"glad\"}",
+             "{\"row_id\": 1, \"label\": \"a\", \"tags\": [{\"name\": 3}]}", "[1]", "{\"row_id\": 1, \"label\": null}"]) {
+  try { print(Json.read<Row>(bad)) } catch (e : JsonParseException) { print(e.message) }
+}
+// expect: $.row_id: a string where an int is wanted
+// expect: $: the object has no "row_id", which a Row needs
+// expect: $.mood: "glad" is not one of Mood's entries, calm, cross
+// expect: $.tags[0].name: an int where a string is wanted
+// expect: $: an array where a Row is wanted
+// expect: $.label: null where a string is wanted
+try { Json.read<JsonArray>("{}") } catch (e : JsonParseException) { print(e.message) }   // expect: $: an object where a JsonArray is wanted
+
+// -- What JSON has no form of, with no default --
+class Plain(val x : int)
+try { Json.write(Plain(1)) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: Object of type Plain is not JSON serializable
+print(Json.write(Plain(2), default = { p -> (p as Plain).x }))   // expect: 2
+
+// -- The type to read as, from where the value goes --
+val asPoint : Spot = Json.read("{\"x\": 1, \"y\": 2}")
+val asSpots : List<Spot> = Json.read("[{\"x\": 3, \"y\": 4}]")
+val asNothing : Spot? = Json.read("null")
+fun xOf(s : Spot) : int => s.x
+print(asPoint, asSpots, asNothing, xOf(Json.read("{\"x\": 9, \"y\": 0}")), Json.read("[1]"))   // expect: Spot(x=1, y=2) [Spot(x=3, y=4)] null 9 [1]

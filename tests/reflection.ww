@@ -144,3 +144,33 @@ class Link(private val secret : int, val next : Link?) {
 }
 print(Link(1, null).inside())                          // expect: ["secret", "next"] ["secret", "next"] ["secret", "next"]
 print(Link#.field("next")!!.type.fields.map { it.name })   // expect: ["next"]
+
+// -- T# in a generic function or class: the class of the type argument it was given --
+data Spot(val x : int = 0, val y : int = 0)
+fun <T> makeOne() : T => T#.constructors[0].call(3, 4) as T
+fun <T> labels() : List<string> => [1, 2].map { T#.name + it.toString() }
+fun <T : Number> numberName() : string => T#.name
+fun <T> holds(x : any?) : bool => T#.isInstance(x)
+class Shelf<T> {
+  fun what() : string => T#.name
+}
+print(makeOne<Spot>(), labels<string>(), numberName<float>(), Shelf<Spot>().what())   // expect: Spot(x=3, y=4) ["string1", "string2"] float Spot
+print(holds<int>(3), holds<int>("a"), holds<Spot?>(null), holds<Spot>(null))         // expect: true false true false
+
+// -- A class says whether it is a data class, an enum its entries; a constructor called by names --
+enum Tone { low, high }
+data Mark(val x : int = 1, val label : string = "a-$x", val z : float = 0.5)
+print(Tone#.entries, Tone.high#.entries, Tone#.isData, Mark#.isData, Spot#.isData, Shelf#.isData, Mark#.entries)   // expect: [low, high] [low, high] false true true false []
+val build = Mark#.constructors[0]
+print(build.callBy({"z": 2.0}), build.callBy({"x": 5}), build.callBy({:}))   // expect: Mark(x=1, label="a-1", z=2.0) Mark(x=5, label="a-5", z=0.5) Mark(x=1, label="a-1", z=0.5)
+data Pair2(val a : int, val b : int = a * 2)
+print(Pair2#.constructors[0].callBy({"a": 3}))   // expect: Pair2(a=3, b=6)
+for (bad in [{"q": 1}, {"b": 2}, {"a": "s"}]) {
+  try { print(Pair2#.constructors[0].callBy(bad)) } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: Pair2 has no parameter named q
+// expect: Pair2: a is not given and has no default
+// expect: Pair2: a is int, which s is not
+
+// -- A float read from text past the largest is infinite, below the smallest zero --
+print("1e400".toFloat(), "-1e400".toFloat(), "1e-400".toFloat(), "-1e-400".toFloat(), "0.000123e310".toFloat(), "2.5e-324".toFloat(), "1e".toFloatOrNull())   // expect: inf -inf 0.0 -0.0 1.23e+306 5e-324 null
