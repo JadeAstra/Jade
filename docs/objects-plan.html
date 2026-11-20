@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan: programs of objects at speed</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+p { margin: 0 0 12px; }
+ul, ol { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.note { color: var(--muted); font-size: 0.93rem; }
+.rec { color: var(--accent); font-weight: 600; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: programs of objects at speed</h1>
+<p class="lede">Written 2026-11-20, at the user's word ("write a plan for these"), after toww, the x86 emulator ported from Kotlin to WinterWolf, ran 45 times slower than the Kotlin: about 250,000 guest instructions a second against 10 million. Its agent suggested six changes to ww; each was measured here, and the plan is what the measurements say to do, in order. A plan with its questions for the user at the end; nothing is built until they are answered.</p>
+
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#op-why">What a program of objects costs today</a></li>
+<li><a href="#op-six">The six suggestions, measured</a></li>
+<li><a href="#op-p1">Part 1: field reads in native code never slower than the VM</a></li>
+<li><a href="#op-p2">Part 2: methods that may be overridden, put in place behind a check</a></li>
+<li><a href="#op-p3">Part 3: a call that is made, cheaper</a></li>
+<li><a href="#op-p4">Part 4: objects made cheaply</a></li>
+<li><a href="#op-p5">Part 5: native code across calls, after the emitter</a></li>
+<li><a href="#op-toww">What toww can do itself</a></li>
+<li><a href="#op-yard">The yardstick</a></li>
+<li><a href="#op-order">Order and versions</a></li>
+<li><a href="#op-risks">Risks</a></li>
+<li><a href="#op-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="op-why">What a program of objects costs today</h2>
+<p>toww runs each guest instruction through <code>VirtualMachine.runFast</code>: the address mapped, the decoded instruction found and its bytes compared with memory (self-modifying code), the instruction's <code>execute</code> called through an interface, flags set through methods of <code>EFlags</code>, the timers and sound polled, interrupts looked at. Each is a few calls and many reads of fields through chains (<code>vm.regs.flags.overflow</code>). The JVM puts all of that in place and keeps the fields in registers; the VM does each step.</p>
+<p>Measured 2026-11-20 on 0.9.5043, Windows, Clang build: a counted guest loop (<code>ADD</code>, <code>INC</code>, a store, <code>DEC</code>, <code>JNZ</code>) through toww's own fast loop ran <strong>567,000 instructions a second with the VM alone, 580,000 with native code</strong>: native code gives this program nothing. <code>ww --profile</code> (built for this, 0.9.5043) on it:</p>
+<div class="table"><table>
+<thead><tr><th>Where</th><th class="num">Share</th></tr></thead>
+<tbody>
+<tr><td><code>runFast</code>'s own lines: mapping, the successor link, the mode, the counters, the hooks</td><td class="num">44%</td></tr>
+<tr><td>the instruction itself (<code>IncDecRegOp</code>, <code>ArithRegOp</code>, <code>MovMemOffsetRegOp</code>, ...)</td><td class="num">~25%</td></tr>
+<tr><td>flags (<code>setBit</code>, <code>EFlags.current</code>, <code>updateZSP</code>, the lazy ones)</td><td class="num">~17%</td></tr>
+<tr><td>the bytes compared with memory (<code>isCurrent</code>, <code>matches</code>, <code>physMatches</code>)</td><td class="num">~14%</td></tr>
+<tr><td><code>afterInstruction</code>, <code>executeOp</code> themselves</td><td class="num">~6%</td></tr>
+</tbody></table></div>
+<p class="note">A sample waits for the next loop turn or call, so a short function's time is counted partly in its caller: <code>runFast</code>'s share is the larger for it, the leaves' the smaller.</p>
+<p>What each kind of step costs, in ns, 3 million times round a loop in a function (<code>fields.ww</code>, <code>icall.ww</code> in the measurements of 2026-11-20):</p>
+<div class="table"><table>
+<thead><tr><th>Step</th><th class="num">Native code</th><th class="num">VM alone</th></tr></thead>
+<tbody>
+<tr><td>a field of a parameter, <code>r.eip</code></td><td class="num">1.0</td><td class="num">4.0</td></tr>
+<tr><td>a field of a global, <code>g.eip</code></td><td class="num"><strong>9.6</strong></td><td class="num">4.9</td></tr>
+<tr><td>a chain of two, <code>r.flags.zero</code></td><td class="num"><strong>11.4</strong></td><td class="num">4.9</td></tr>
+<tr><td>a method of a class, put in place automatically</td><td class="num">1.5</td><td class="num">8.5</td></tr>
+<tr><td>a method that overrides another, or called through an interface</td><td class="num"><strong>12.2</strong></td><td class="num">12.0</td></tr>
+<tr><td>an object of a class of no fields made</td><td class="num"><strong>31</strong></td><td class="num">31</td></tr>
+<tr><td>an object of two fields made (a class, or data)</td><td class="num"><strong>41</strong></td><td class="num">42</td></tr>
+<tr><td>a list of two made</td><td class="num">55</td><td class="num">54</td></tr>
+</tbody></table></div>
+<p>For comparison, the JVM does each of these in about 1 ns once it has compiled the loop.</p>
+
+<h2 id="op-six">The six suggestions, measured</h2>
+<div class="table"><table>
+<thead><tr><th>Suggested</th><th>What the measurements say</th><th>In this plan</th></tr></thead>
+<tbody>
+<tr><td>1. Fields reached by their slot when compiling, not by name each time</td><td>The VM reads a field in 4 to 5 ns, through the place's cache (the class's layout, then the slot): it is not looked up by name each time. Native code reads a parameter's field in 1 ns, but a global's and a chain's more slowly than the VM: a fault, not a design.</td><td>Part 1</td></tr>
+<tr><td>2. No type checks where the compiler knows the type</td><td>Nothing in the profile points at type checks; where native code knows the kind of a value it checks nothing already.</td><td>Not now</td></tr>
+<tr><td>3. Interface and virtual calls cheaper (a cache at each call)</td><td>The interface is not the cost: a method that overrides another costs the same 12 ns called through its own class. What costs is that such a method is never put in place (a small method of a class is, behind a class check, at 1.5 ns), and that a call made costs 12 ns.</td><td>Parts 2 and 3</td></tr>
+<tr><td>4. Calls, fields and lists cheaper in the VM's loop</td><td>The same costs as 1 and 3, seen from the VM's side.</td><td>Parts 1 to 3</td></tr>
+<tr><td>5. Native code over whole functions and the methods they call</td><td>This is the native-calls plan (<a href="native-calls-plan.html">native-calls-plan.html</a>), whose spike failed its gate on 2026-11-15. The emitter (<a href="emitter-plan.html">emitter-plan.html</a>) is where it can be done properly.</td><td>Part 5, after the emitter</td></tr>
+<tr><td>6. Small objects made cheaply (about 85 ns each)</td><td>31 ns for an object of no fields, 41 for two: each object is its own <code>new</code>, linked into the collector's list, and each is freed by its own <code>delete</code> as it is collected; and the constructor is a call.</td><td>Part 4</td></tr>
+</tbody></table></div>
+<p>So the emitter alone would not make toww fast: native code does nothing for it today, as its loop is calls, chains of fields and objects. Parts 1 to 4 make those cheap in the VM and in native code as they are now; part 5 then lets native code run across the calls, on the emitter.</p>
+
+<h2 id="op-p1">Part 1: field reads in native code never slower than the VM</h2>
+<p>A field of a slot's object is read by native code in 1 ns (the region looks at the place's cache, then reads the slot). A field of a global's object, and the second field of a chain, take 10 to 11 ns: twice the VM. The work:</p>
+<ol>
+<li>Find why, with <code>WW_DUMP_NATIVE</code> on the two loops of <code>fields.ww</code>: whether the region leaves for the VM at the read (a global read the region does not do, or an object it does not know the class of), or reads it the slow way each time round.</li>
+<li>Read a global's object as a slot's is: a global the loop never writes is read once as the region starts (as a field held for the region is, <code>lookp</code>), and its fields read through the cache.</li>
+<li>Read a chain's second field as the first: the object the first read gave, its class taken from the cache that read filled.</li>
+</ol>
+<p>Gate: both rows of the table at 2 ns or less in native code, and no row of <code>timings.html</code> slower.</p>
+
+<h2 id="op-p2">Part 2: methods that may be overridden, put in place behind a check</h2>
+<p>Today a small method of a class is put in place where it is called, behind a check that the object is of exactly that class (<code>JumpIfNotClass</code>; the call made as before where it is not). A method that overrides another, or one called through an interface, never is: the checker cannot say which class's method the call reaches. Yet at many calls one class does: toww's <code>op.op.execute(this)</code> reaches dozens of classes, but most interfaces and overrides in a program have one class that answers them at a given call.</p>
+<ol>
+<li><strong>One class in the program.</strong> Where the checker finds a single class in the whole program (the libraries with it) that has the method, an interface with one class implementing it, or an override no class below overrides, the call is that class's method, put in place behind the same check. A class made later (a script, a program loaded) fails the check and is called as now: nothing can go wrong, only stay slow.</li>
+<li><strong>The class each call has met.</strong> Where several classes have the method, the VM's own call notes the class it last met at the call (a cache by the call, beside the field caches); a region made from that call puts that class's method in place behind the check, as part 2.1 does. Native code alone: the VM's copy of the function cannot change once it runs.</li>
+</ol>
+<p>Gate: <code>icall.ww</code>'s override and interface rows at 2 ns or less in native code (one class), and toww measured with the methods so put in place.</p>
+
+<h2 id="op-p3">Part 3: a call that is made, cheaper</h2>
+<p>Where the method is not put in place (toww's <code>execute</code>, reaching many classes), a call costs 12 ns: finding the method by its name in the class's table, checking the arguments, making the frame, and going back. The work:</p>
+<ol>
+<li>Measure where the 12 ns go, with a C++ profiler on <code>icall.ww</code> (Windows Performance Recorder, or <code>perf</code> in WSL where the user installs it).</li>
+<li>A cache at each call of a method: the class last met and the method found for it, so that a call to the class met before goes straight to the method (no look-up by name). Several classes at one call keep the last few.</li>
+<li>Whatever else the measurement shows: a frame made with less (slots set to nothing that the function writes before it reads), the arguments' checks left out where the checker proved them.</li>
+</ol>
+<p>Gate: a call of a method not put in place at 6 ns or less in the VM.</p>
+
+<h2 id="op-p4">Part 4: objects made cheaply</h2>
+<p>Each object is made by its own <code>new</code> (the C++ heap's lock and search), linked into the collector's list, counted, and freed by its own <code>delete</code> when it is collected; its constructor is a call of its own. The work:</p>
+<ol>
+<li>Objects of the sizes most are made in (up to a few hundred bytes) taken from blocks of their size that the VM keeps, a block for each thread, and given back to it as they are collected: no lock, no search, no call to the system. Objects past that size as now.</li>
+<li>A constructor that only sets fields from its arguments (a data class, a class with a header and no <code>init</code> of its own) made in place: the object made and its fields written by the instruction itself, with no call.</li>
+<li>The collector's sweep walks the blocks rather than the list of every object.</li>
+</ol>
+<p>Gate: an object of no fields at 10 ns or less, of two fields at 12 ns or less, and the suite's GC-stress setting as it is.</p>
+
+<h2 id="op-p5">Part 5: native code across calls, after the emitter</h2>
+<p>With parts 1 to 4, a loop of toww's kind does in the VM what it must, each step cheaply. Native code that keeps going across a call (the callee's own native code entered from the caller's, its frame made by native code) is the native-calls plan, whose spike failed its gate with Clang stencils; the emitter makes the calling convention ww's own. It is planned there, after the emitter's parts 1 and 2, and measured on toww.</p>
+
+<h2 id="op-toww">What toww can do itself</h2>
+<p>Things the profile shows that are toww's to change, for its agent, whatever ww does (none needs anything of ww):</p>
+<ul>
+<li><strong>Self-modifying code found as memory is written, not as each instruction runs.</strong> Each instruction's bytes are compared with memory before it runs (14%). A write to a page holding decoded code can mark that page's instructions stale instead (toww already has <code>writeChanged</code> and <code>checkSmcBefore</code> for the bus's writes), and the run loop then compares only on a page so marked.</li>
+<li><strong>Devices polled when they are due.</strong> <code>afterInstruction</code> polls the timer, the keyboard and the sound after each instruction; each can say the instruction count it next needs looking at, and the loop compare one number.</li>
+<li><strong>The CPU's state in fewer objects.</strong> <code>vm.regs.flags.overflow</code> is three reads; the flags in fields of the CPU's own class, read as one int and its bits, are one.</li>
+<li><strong>Measuring with ww's profiler</strong>: <code>ww --profile=out.txt headless.ww ...</code>, the report's functions by total time and its lines.</li>
+</ul>
+
+<h2 id="op-yard">The yardstick</h2>
+<ul>
+<li><code>tests/bench/objects.ww</code> (to be written): the table above, each row a loop of its own, run with native code and with the VM alone, best of three.</li>
+<li>toww's counted loop (<code>bench.ww</code> in the measurements: the ROM, <code>startHeadless</code>, <code>controller.run</code>, instructions a second), on a fixed toww commit (2bfe9b4 today), kept out of the repository.</li>
+<li>The suite in every setting at each part's end, and toww's own tests (<code>CpuTest</code>, <code>SoundTest</code>, <code>RunLoopTest</code>) on Windows and Linux.</li>
+</ul>
+
+<h2 id="op-order">Order and versions</h2>
+<div class="table"><table>
+<thead><tr><th>Part</th><th>What</th><th>When</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>field reads in native code never slower than the VM</td><td>first: a fault, the smallest</td></tr>
+<tr><td>2</td><td>overridden methods put in place behind a check (2.1 the program's one class; 2.2 the class each call met)</td><td>second: the most for toww</td></tr>
+<tr><td>3</td><td>a call made, cheaper</td><td>third</td></tr>
+<tr><td>4</td><td>objects made cheaply</td><td>fourth: the largest change, to the collector</td></tr>
+<tr><td>5</td><td>native code across calls</td><td>after the emitter's parts 1 and 2</td></tr>
+</tbody></table></div>
+<p>Each part is a commit of its own (0.9.50xx, counting on), with toww measured after each and the numbers added here.</p>
+
+<h2 id="op-risks">Risks</h2>
+<ul>
+<li><strong>Part 2's check.</strong> A method put in place for one class must never run on an object of another: the check is the one <code>JumpIfNotClass</code> already makes for the methods put in place today, and a test of every form (an interface, an override, a subclass made after, a class of a script) goes with it.</li>
+<li><strong>Part 4 and the collector.</strong> Objects in blocks change how the sweep finds them and how memory is given back; GC stress, thread stress and ASan at the part's end, and the memory a long run keeps (<code>Program.memoryKept</code>) compared before and after.</li>
+<li><strong>A part that gains little.</strong> Each is measured on its own; one whose gate is not reached is said so here and left out, as the native-calls spike was.</li>
+</ul>
+
+<h2 id="op-questions">Questions for the user</h2>
+
+<section class="decision">
+<h3><span class="code">Q1</span>The order</h3>
+<p>Parts 1 to 4 now, in that order, before the networking plan's part 2; part 5 after the emitter's parts 1 and 2. Or after networking; or only some of them.</p>
+<p class="rec">Recommended: parts 1 to 4 now, in order. They speed up every program of objects (Jade's windows, Snippy's runtime, JSON's tree), not only toww.</p>
+<div class="verdict"><span class="label">Your call</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">Q2</span>Part 2's reach: the whole program, the libraries with it</h3>
+<p>Whether part 2.1 counts the classes of the whole program with its libraries (one class having the method anywhere puts it in place), or only those of the method's own library (a library's methods put in place only where no other library could add a class).</p>
+<p class="rec">Recommended: the whole program, as it is checked together; the check makes a class added later safe.</p>
+<div class="verdict"><span class="label">Your call</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">Q3</span>Part 4: blocks of a size, each thread its own</h3>
+<p>Objects taken from blocks of their size, each thread keeping its own, as recommended; or the C++ heap kept, with only the constructor call taken away (smaller, about a quarter of the gain).</p>
+<p class="rec">Recommended: blocks of a size, each thread its own.</p>
+<div class="verdict"><span class="label">Your call</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">Q4</span>What toww can do itself</h3>
+<p>Whether the list in <a href="#op-toww">What toww can do itself</a> goes to toww's agent (the user passes it on), is written into toww's <code>docs/design.html</code> by a session in that repository, or is left until ww's parts are done.</p>
+<p class="rec">Recommended: passed to toww's agent now; the self-modifying-code check alone is worth more than any one part here.</p>
+<div class="verdict"><span class="label">Your call</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">Q5</span>The gates</h3>
+<p>The gates as written: part 1, 2 ns; part 2, 2 ns; part 3, 6 ns; part 4, 10 and 12 ns; each measured on the yardstick, the suite passing in every setting.</p>
+<p class="rec">Recommended: as written.</p>
+<div class="verdict"><span class="label">Your call</span><span class="blank"></span></div>
+</section>
+
+</main>
+</body>
+</html>
