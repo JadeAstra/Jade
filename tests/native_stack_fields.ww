@@ -1,0 +1,99 @@
+// Fields read by the stack form of a field read (GET_PROP: the object a global holds, or the
+// last of a chain, `r.flags.zero`), which native code did not read itself before the objects
+// plan's part 1 (2026-11-20): every kind of field, read each time round a loop, the answers as
+// the VM's; a read meeting objects of another class, a field changed meanwhile, null on the way.
+
+class Flags {
+  var zero = false
+  var count = 0
+  var ratio = 0.5
+  var name = "f"
+  var next : Flags? = null
+}
+class Regs {
+  var eip = 3
+  var wide = 2.5
+  val flags = Flags()
+  var maybe : Flags? = null
+}
+class Other {
+  var eip = 100
+  val flags = Flags()
+}
+
+val g = Regs()
+
+// A global's fields of each kind.
+fun globalInts(n : int) : int { var s = 0; for i in 0..<n { s += g.eip }; return s }
+fun globalFloats(n : int) : float { var s = 0.0; for i in 0..<n { s += g.wide }; return s }
+fun globalBools(n : int) : int { var s = 0; for i in 0..<n { if (g.flags.zero) { s += 1 } }; return s }
+fun globalStrings(n : int) : int { var s = 0; for i in 0..<n { s += g.flags.name.size }; return s }
+// Chains of a parameter's.
+fun chainInts(r : Regs, n : int) : int { var s = 0; for i in 0..<n { s += r.flags.count }; return s }
+fun chainFloats(r : Regs, n : int) : float { var s = 0.0; for i in 0..<n { s += r.flags.ratio }; return s }
+// A chain the loop changes as it goes.
+fun chainChanged(r : Regs, n : int) : int {
+  var s = 0
+  for i in 0..<n {
+    r.flags.count = i
+    s += r.flags.count
+  }
+  return s
+}
+// The object a read meets changes class: an `any` read through `as`.
+fun eipOf(x : any, n : int) : int {
+  var s = 0
+  for i in 0..<n {
+    s += x is Regs ? (x as Regs).eip : (x as Other).eip
+  }
+  return s
+}
+// Null part of the way along.
+fun maybeCounts(r : Regs, n : int) : int {
+  var s = 0
+  for i in 0..<n { s += r.maybe?.count ?: -1 }
+  return s
+}
+// A global that is given another object meanwhile: each read the one there now.
+fun globalSwapped(n : int) : int {
+  var s = 0
+  for i in 0..<n {
+    if (i == n / 2) { g.flags.count = 7 }
+    s += g.flags.count
+  }
+  return s
+}
+
+val n = 5000
+for round in 0..<3 {  // the regions made, then run
+  print("${globalInts(n)} ${globalFloats(n)} ${globalBools(n)} ${globalStrings(n)}")
+  print("${chainInts(g, n)} ${chainFloats(g, n)} ${chainChanged(g, n)}")
+  print("${eipOf(g, n)} ${eipOf(Other(), n)}")
+  g.maybe = null
+  print(maybeCounts(g, n))
+  g.maybe = Flags()
+  g.maybe!!.count = 2
+  print(maybeCounts(g, n))
+  g.flags.count = 0
+  print(globalSwapped(n))
+  g.flags.zero = round == 1
+  g.eip = 3
+}
+// expect: 15000 12500.0 0 5000
+// expect: 0 2500.0 12497500
+// expect: 15000 500000
+// expect: -5000
+// expect: 10000
+// expect: 17500
+// expect: 15000 12500.0 0 5000
+// expect: 35000 2500.0 12497500
+// expect: 15000 500000
+// expect: -5000
+// expect: 10000
+// expect: 17500
+// expect: 15000 12500.0 5000 5000
+// expect: 35000 2500.0 12497500
+// expect: 15000 500000
+// expect: -5000
+// expect: 10000
+// expect: 17500

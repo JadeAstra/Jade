@@ -2432,7 +2432,38 @@ struct Region {
                     // region was made (a copy of an object is the object), and known as RGetProp's
                     // is, to be looked at once. Anything else the VM's.
                     Value held;
-                    if (!fieldValue(s, obj, u16(x, 2), -1, held) || held.kind != ValueKind::Obj) island();
+                    if (!fieldValue(s, obj, u16(x, 2), -1, held) || held.kind != ValueKind::Obj) {
+                        // Any other field, read as RGetProp reads one (objects plan part 1, 2026-11-20:
+                        // a global's field, `g.eip`, and a chain's last, `r.flags.zero`, were the
+                        // VM's, the region leaving and coming back each time round, twice the VM's
+                        // own time): a number kept as its payload alone, as the place's cache saw
+                        // it, into a register (getpi, getpf); anything else as it is, into the slot
+                        // (getpv). Each checks the object's class against the cache as it runs, and
+                        // leaves for the VM where it differs.
+                        const uint64_t seen = cacheSeen(u16(x, 2));
+                        int cls = -1;
+                        if ((seen & 0x80) != 0 && (seen & 3) == static_cast<uint64_t>(ValueKind::Float)) cls = CF;
+                        else if ((seen & 0x80) != 0 && (seen & 3) == static_cast<uint64_t>(ValueKind::Int)) cls = CI;
+                        c.writeMemoryLater(top - 1);  // the object, where the VM does the instruction again
+                        LOp* l;
+                        K made{kMem};
+                        if (cls >= 0) {
+                            const Reg dst{top - 1, static_cast<Cls>(cls)};
+                            l = &c.op(cls == CF ? "getpf" : "getpi", {dst}, {}, {dst});
+                            made = K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)};
+                        } else {
+                            l = &c.op("getpv");
+                            l->slot2 = top - 1;
+                        }
+                        l->slot = obj;
+                        l->ki = cacheAddress(u16(x, 2));
+                        l->field = name.isObjType(ObjType::String) ? asString(name) : nullptr;
+                        c.leaves(*l);
+                        c.write(top - 1, made);
+                        if (cls < 0) noteFact(s, top - 1, [&](Fact& f) { f.from = c.i; });
+                        c.fall(s);
+                        return;
+                    }
                     // The object's slot as it was on the step's way out, where the VM, doing the
                     // instruction again, reads it (2026-11-19: a receiver pushed as a copy of
                     // `this`, never written, was taken as written where a read of a field missed,

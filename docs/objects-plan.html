@@ -151,6 +151,8 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li>Read a chain's second field as the first: the object the first read gave, its class taken from the cache that read filled.</li>
 </ol>
 <p>Gate: both rows of the table at 2 ns or less in native code, and no row of <code>timings.html</code> slower.</p>
+<h4 id="op-p1-done">Built 2026-11-20 (0.9.5047): gate reached</h4>
+<p>The two loops' regions left at the field read for the VM each time round: the compiler writes the stack form (<code>GET_PROP</code>) where the object comes from a global or from another field, and the region did that form itself only for a value type's field or a field that held an object. It now reads any other field as the register form (<code>R_GET_PROP</code>) does: a number kept as its payload alone, as the place's cache saw it, into a register (<code>getpi</code>, <code>getpf</code>), and anything else into the slot (<code>getpv</code>), each checking the object's class as it runs. A global's field 9.6 ns to 1.8, a chain of two 11.4 to 1.8, with native code; the VM alone as it was. <code>tests/native_stack_fields.ww</code>: every kind of field read so, objects of two classes at one read, null on the way, fields changed meanwhile, the answers as the VM's. toww's counted loop as it was (its loop's time goes to calls, parts 2 to 4).</p>
 
 <h2 id="op-p2">Part 2: methods that may be overridden, put in place behind a check</h2>
 <p>Today a small method of a class is put in place where it is called, behind a check that the object is of exactly that class (<code>JumpIfNotClass</code>; the call made as before where it is not). A method that overrides another, or one called through an interface, never is: the checker cannot say which class's method the call reaches. Yet at many calls one class does: toww's <code>op.op.execute(this)</code> reaches dozens of classes, but most interfaces and overrides in a program have one class that answers them at a given call.</p>
@@ -202,12 +204,13 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <thead><tr><th>Part</th><th>What</th><th>When</th></tr></thead>
 <tbody>
 <tr><td>1</td><td>field reads in native code never slower than the VM</td><td>first: a fault, the smallest</td></tr>
-<tr><td>2</td><td>overridden methods put in place behind a check (2.1 the program's one class; 2.2 the class each call met)</td><td>second: the most for toww</td></tr>
-<tr><td>3</td><td>a call made, cheaper</td><td>third</td></tr>
+<tr><td>2</td><td>overridden methods put in place behind a check (2.1 the program's one class; 2.2 the class each call met)</td><td>third (after part 3, the user, 2026-11-20)</td></tr>
+<tr><td>3</td><td>a call made, cheaper</td><td>second (before part 2, the user, 2026-11-20)</td></tr>
 <tr><td>4</td><td>objects made cheaply</td><td>fourth: the largest change, to the collector</td></tr>
 <tr><td>5</td><td>native code across calls</td><td>after the emitter's parts 1 and 2</td></tr>
 </tbody></table></div>
 <p>Each part is a commit of its own (0.9.50xx, counting on), with toww measured after each and the numbers added here.</p>
+<p><strong>Part 3 before part 2</strong> (the user, 2026-11-20, as recommended once part 1 was done): toww's main dispatch, <code>op.op.execute(this)</code>, reaches 172 classes implementing <code>IrOp</code>, with large bodies, which part 2 does not put in place (small bodies alone, and one class in the program); and its other hot calls are of plain classes' small methods, put in place already. Part 3, each call made cheaper, is what reaches every one of those calls.</p>
 
 <h2 id="op-risks">Risks</h2>
 <ul>
