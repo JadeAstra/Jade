@@ -1,0 +1,445 @@
+// ---- Record files (JadeDB) and blob files (JadeHeap) ----
+
+// A file of records all the same size, read whole and written one record at a time, and a
+// file of blobs of any size beside it (JadeLib's DB). A table is a class extending JadeDB that
+// says how big its records are and how each is laid out:
+//
+//   data Item(val name : string, val price : int)
+//
+//   class Items(path : string) : JadeDB(path) {
+//     override val recordSize = 20                  // a name of 16 bytes, then a 4-byte price
+//     private val every = cached { mapRecords { bytes, at -> Item(readFixed(bytes, at, 16), readInt32(bytes, at + 16)) } }
+//     val all : List<Item>
+//       get() => every.value
+//     fun add(item : Item) { appendRecord { writeFixed(item.name, 16); writeInt32(item.price) } }
+//     fun setPrice(index : int, item : Item) { updateRecordAt(index) { writeFixed(item.name, 16); writeInt32(item.price) } }
+//   }
+//
+// Numbers are kept big-endian, text as UTF-8 in a field of a fixed size. The file is opened on
+// first use and stays open; close() lets go of it (Windows will not delete or replace an open
+// file), and the next read or write opens it again. Each change is made holding the table's
+// lock, so threads can share a table; a subclass doing more than one step with the file holds
+// `lock` itself. A cached { } value is dropped whenever a record is written, made again when
+// next asked for.
+
+// A blob kept in a JadeHeap: where its 4-byte length is in the file, and how long it is.
+data BlobRef(val offset : int, val length : int)
+
+// A file a JadeDB or a JadeHeap keeps: opened on first use, closed to let go of it, opened again
+// after. Only with `lock` held.
+class __BinaryFile {
+  val path : FilePath
+  val lock = Lock()
+  internal var opened : RandomAccessFile? = null
+
+  fun init(path : FilePath) {
+    this.path = path
+  }
+
+  // The file, open to read and write: made if it is not there.
+  fun file() : RandomAccessFile throws IOException {
+    val now = opened
+    if (now != null) { return now }
+    val made = RandomAccessFile(path, "rw")
+    opened = made
+    return made
+  }
+
+  // The file's size: 0 if it is not there, which does not make it.
+  fun size() : int throws IOException {
+    val now = opened
+    if (now != null) { return now.size() }
+    return path.exists() ? path.size() : 0
+  }
+
+  fun sync() throws IOException {
+    lock.useKey { opened?.sync() }
+  }
+
+  fun close() {
+    lock.useKey {
+      opened?.close()
+      opened = null
+    }
+  }
+}
+
+// A file of records of `recordSize` bytes each, one after another: subclassed for each table.
+// With appendMode true, writeInt32 and the other writes outside appendRecord and updateRecordAt
+// go to the end of the file, as they do in a file opened to append; otherwise to `position`.
+abstract class JadeDB {
+  // The file the records are kept in.
+  protected val dbFile : FilePath
+  // How many bytes each record takes.
+  abstract val recordSize : int
+
+  private val handle : __BinaryFile
+  private val appendMode : bool
+  private val caches : open List<JadeDB.Cached<any?>> = []
+  private var record : Bytes? = null   // the record appendRecord or updateRecordAt is making
+  private var recordAt = 0             // where in it the next write goes
+
+  // Where the writes outside appendRecord and updateRecordAt go in the file: each moves it on
+  // past what it wrote. With appendMode, the end of the file whenever it is opened.
+  protected var position = 0
+
+  // A table kept in `fileName`, which need not be there yet: the first write makes it.
+  fun init(fileName : FilePath | string, appendMode : bool = false) {
+    this.dbFile = fileName is FilePath ? fileName : FilePath(fileName as string)
+    this.appendMode = appendMode
+    this.handle = __BinaryFile(this.dbFile)
+  }
+
+  // The lock every change holds: a subclass holds it too for anything of more than one step
+  // with `file` or `position`.
+  protected val lock : Lock
+    get() => handle.lock
+
+  // The file, open to read and write, made if it is not there; opened again after close().
+  // Only with `lock` held.
+  protected val file : RandomAccessFile
+    get() throws IOException {
+      val now = handle.opened
+      if (now != null) { return now }
+      val made = handle.file()
+      if (appendMode) { position = made.size() }
+      return made
+    }
+
+  // Whether the file is there.
+  fun exists() : bool => dbFile.exists()
+
+  // Returns once what was written is on the disk; nothing if nothing was written.
+  fun sync() throws IOException {
+    handle.sync()
+  }
+
+  // Lets go of the file, which Windows wants before it is deleted or replaced. The next read or
+  // write opens it again.
+  fun close() {
+    handle.close()
+  }
+
+  // Adds a record at the end of the file: `writer` writes its fields with writeInt32,
+  // writeInt64, writeFixed and writeBytes, in order. What it leaves of the record's bytes is
+  // zeros; writing past them is an IllegalStateException.
+  protected fun appendRecord(writer : () -> unit throws IOException) throws IOException {
+    lock.useKey {
+      val made = recordOf(writer)
+      val f = file
+      val end = f.size()
+      f.writeAt(end, made)
+      position = end + made.size
+      invalidate()
+    }
+  }
+
+  // Writes the record at `index` over again, as appendRecord makes one. An index past the last
+  // record makes the file longer, with zeros between.
+  protected fun updateRecordAt(index : int, writer : () -> unit throws IOException) throws IOException {
+    require(index >= 0) { "a record's index is 0 or more, not $index" }
+    lock.useKey {
+      val made = recordOf(writer)
+      file.writeAt(index * recordSize, made)
+      position = (index + 1) * recordSize
+      invalidate()
+    }
+  }
+
+  // Takes every record out: the file left empty.
+  protected fun truncate() throws IOException {
+    lock.useKey {
+      file.setSize(0)
+      position = 0
+      invalidate()
+    }
+  }
+
+  // Takes out the record at `index`, those after it moved down one, in the order they were.
+  // Nothing for an index with no record.
+  protected fun removeRecordAt(index : int) throws IOException {
+    lock.useKey {
+      val count = recordCount()
+      if (index >= 0 and index < count) {
+        val f = file
+        val after = (count - index - 1) * recordSize
+        if (after > 0) { f.writeAt(index * recordSize, f.readAt((index + 1) * recordSize, after)) }
+        f.setSize((count - 1) * recordSize)
+        position = Math.min(position, (count - 1) * recordSize)
+        invalidate()
+      }
+    }
+  }
+
+  // Every byte of the file: none if it is not there, which does not make it.
+  protected fun readAllBytes() : Bytes throws IOException {
+    return lock.useKey {
+      val size = handle.size()
+      size == 0 ? Bytes(0) : file.readAt(0, size)
+    }
+  }
+
+  // The record at `index`, or null where there is none.
+  protected fun readRecordAt(index : int) : Bytes? throws IOException {
+    return lock.useKey {
+      index >= 0 and (index + 1) * recordSize <= handle.size() ? file.readAt(index * recordSize, recordSize) : null
+    }
+  }
+
+  // How many whole records the file holds: 0 if it is not there.
+  protected fun recordCount() : int throws IOException => lock.useKey { handle.size() / recordSize }
+
+  // Runs `action` for each record, with the file's bytes and where the record starts in them.
+  protected fun forEachRecord(action : (Bytes, int) -> unit throws IOException) throws IOException {
+    val bytes = readAllBytes()
+    val size = recordSize
+    var at = 0
+    while (at + size <= bytes.size) {
+      action(bytes, at)
+      at += size
+    }
+  }
+
+  // What `transform` makes of each record, as forEachRecord gives them, nulls left out.
+  protected fun <T> mapRecords(transform : (Bytes, int) -> T? throws IOException) : open List<T> throws IOException {
+    val out : open List<T> = []
+    forEachRecord { bytes, at ->
+      val made = transform(bytes, at)
+      if (made != null) { out.add(made) }
+    }
+    return out
+  }
+
+  // ---- Fields ----
+
+  // The signed 32-bit number at `at`, big-endian.
+  protected fun readInt32(bytes : Bytes, at : int) : int => bytes.int32(at, true)
+
+  // The signed 64-bit number at `at`, big-endian.
+  protected fun readInt64(bytes : Bytes, at : int) : int => bytes.int64(at, true)
+
+  // The text in the `size` bytes at `at`, as writeFixed keeps it: UTF-8, the zeros and spaces
+  // after it left off.
+  protected fun readFixed(bytes : Bytes, at : int, size : int) : string {
+    var end = at + size
+    while (end > at and __dbPadding(bytes[end - 1])) { end -= 1 }
+    var text = bytes[at ..< end].decodeToString()
+    while (text.isNotEmpty() and (text[text.size - 1].code == 0 or text[text.size - 1].isWhitespace())) {
+      text = text[0 ..< text.size - 1]
+    }
+    return text
+  }
+
+  // Writes `value` as a signed 32-bit number, big-endian: an ArithmeticException where it does
+  // not fit.
+  protected fun writeInt32(value : int) throws IOException {
+    writeBytes(Bytes(4).putInt32(0, value, true))
+  }
+
+  // Writes `value` as a signed 64-bit number, big-endian.
+  protected fun writeInt64(value : int) throws IOException {
+    writeBytes(Bytes(8).putInt64(0, value, true))
+  }
+
+  // Writes `text` as UTF-8 in exactly `size` bytes: zeros after it, or cut short where it is
+  // longer, before the character that would not fit whole.
+  protected fun writeFixed(text : string, size : int) throws IOException {
+    val raw = text.toBytes()
+    var take = Math.min(raw.size, size)
+    if (take < raw.size) {
+      while (take > 0 and (raw[take] & 0xC0) == 0x80) { take -= 1 }
+    }
+    val out = Bytes(size)
+    if (take > 0) { out.copyFrom(raw, 0, 1, 0, 1, take) }
+    writeBytes(out)
+  }
+
+  // Writes `data` as it is: into the record appendRecord or updateRecordAt is making, or else
+  // into the file at `position`.
+  protected fun writeBytes(data : Bytes) throws IOException {
+    val r = record
+    if (r != null) {
+      if (recordAt + data.size > r.size) {
+        throw IllegalStateException("a record is ${r.size} bytes: ${data.size} more after ${recordAt} go past its end")
+      }
+      if (data.size > 0) { r.copyFrom(data, 0, 1, recordAt, 1, data.size) }
+      recordAt += data.size
+    } else {
+      lock.useKey {
+        val f = file
+        f.writeAt(position, data)
+        position += data.size
+      }
+    }
+  }
+
+  private fun recordOf(writer : () -> unit throws IOException) : Bytes throws IOException {
+    if (record != null) { throw IllegalStateException("a record is being written already: appendRecord and updateRecordAt do not go one inside the other") }
+    val made = Bytes(recordSize)
+    record = made
+    recordAt = 0
+    try {
+      writer()
+    } finally {
+      record = null
+    }
+    return made
+  }
+
+  // ---- What is kept in memory ----
+
+  // A value worked out from the file when first asked for, and kept until a record is written
+  // or invalidate() is called; then worked out again when next asked for.
+  //
+  //   private val names = cached { mapRecords { bytes, at -> readFixed(bytes, at, 16) } }
+  //   ... names.value ...
+  protected fun <T> cached(initializer : () -> T throws IOException) : JadeDB.Cached<T> {
+    val made = JadeDB.Cached<T>(initializer)
+    lock.useKey { caches.add(made as JadeDB.Cached<any?>) }
+    return made
+  }
+
+  // A value cached { } keeps.
+  class Cached<T> {
+    private val initializer : () -> T throws IOException
+    private val kept : Atomic<any?> = Atomic(__DbUnset)
+    private val making = Lock()
+
+    fun init(initializer : () -> T throws IOException) {
+      this.initializer = initializer
+    }
+
+    // The value: worked out now if it is not kept, once however many threads ask.
+    val value : T
+      get() throws IOException {
+        val now = kept.get()
+        if (now !== __DbUnset) { return now as T }
+        return making.useKey {
+          val again = kept.get()
+          if (again === __DbUnset) {
+            val made = initializer()
+            kept.set(made)
+            made
+          } else {
+            again as T
+          }
+        }
+      }
+
+    // Drops the value: the next `value` works it out again.
+    fun reset() {
+      kept.set(__DbUnset)
+    }
+  }
+
+  // Drops every cached { } value and calls clearIndex(), so what is next asked for is read from
+  // the file again. Writing a record does it; call it after the file is changed some other way.
+  fun invalidate() {
+    val every = lock.useKey { caches.toList() }
+    for (c in every) { c.reset() }
+    clearIndex()
+  }
+
+  // For a subclass's own indexes: dropped here, made again when next wanted.
+  protected fun clearIndex() {}
+}
+
+// What a cached { } value holds before it is worked out.
+object __DbUnset
+
+// Whether a byte at the end of a fixed field is padding: a zero, or ASCII white space.
+fun __dbPadding(b : byte) : bool => b == 0 or b == 32 or (b >= 9 and b <= 13) or (b >= 28 and b <= 31)
+
+// Blobs of any size in one file, each kept as its 4-byte big-endian length and then its bytes:
+// append gives a BlobRef to read it back by. A blob is let go of by dropping its BlobRef;
+// compact makes the file again with only the blobs still wanted.
+class JadeHeap {
+  private val handle : __BinaryFile
+
+  // A heap kept in `fileName`, which need not be there yet: the first append makes it.
+  fun init(fileName : FilePath | string) {
+    this.handle = __BinaryFile(fileName is FilePath ? fileName : FilePath(fileName as string))
+  }
+
+  // Whether the file is there.
+  fun exists() : bool => handle.path.exists()
+
+  // Adds `payload` at the end: the BlobRef to read it by.
+  fun append(payload : Bytes) : BlobRef throws IOException {
+    return handle.lock.useKey {
+      val f = handle.file()
+      val offset = f.size()
+      val out = Bytes(4 + payload.size)
+      out.putInt32(0, payload.size, true)
+      if (payload.size > 0) { out.copyFrom(payload, 0, 1, 4, 1, payload.size) }
+      f.writeAt(offset, out)
+      BlobRef(offset, payload.size)
+    }
+  }
+
+  // The blob `ref` stands for. An IOException where the file holds no blob of that length there.
+  fun read(ref : BlobRef) : Bytes throws IOException {
+    return handle.lock.useKey {
+      val f = handle.file()
+      val head = f.readAt(ref.offset, 4)
+      if (head.size < 4 or head.int32(0, true) != ref.length) {
+        throw IOException("${handle.path}: no blob of ${ref.length} bytes at ${ref.offset}")
+      }
+      val payload = f.readAt(ref.offset + 4, ref.length)
+      if (payload.size < ref.length) {
+        throw IOException("${handle.path}: the blob at ${ref.offset} runs past the end of the file")
+      }
+      payload
+    }
+  }
+
+  // Takes every blob out: the file left empty, before it is filled again.
+  fun clear() throws IOException {
+    handle.lock.useKey { handle.file().setSize(0) }
+  }
+
+  // Returns once what was written is on the disk; nothing if nothing was written.
+  fun sync() throws IOException {
+    handle.sync()
+  }
+
+  // Lets go of the file, which Windows wants before it is deleted or replaced. The next read or
+  // append opens it again.
+  fun close() {
+    handle.close()
+  }
+
+  // Makes the file again with only the blobs of `live`, in that order, the space of the rest
+  // given back: gives each one's new BlobRef by its old one. The new file is written beside the
+  // old one (its name with ".compact" after it), put on the disk, and then moved over the old
+  // one in one step, so a crash leaves one or the other whole.
+  fun compact(live : List<BlobRef>) : Map<BlobRef, BlobRef> throws IOException {
+    return handle.lock.useKey {
+      val payloads = live.map { read(it) }
+      var total = 0
+      for (p in payloads) { total += 4 + p.size }
+      val out = Bytes(total)
+      val remap : open Map<BlobRef, BlobRef> = {:}
+      var at = 0
+      for (i in live.indices) {
+        val p = payloads[i]
+        out.putInt32(at, p.size, true)
+        if (p.size > 0) { out.copyFrom(p, 0, 1, at + 4, 1, p.size) }
+        remap[live[i]] = BlobRef(at, p.size)
+        at += 4 + p.size
+      }
+      val temporary = FilePath(handle.path.text + ".compact")
+      val written = RandomAccessFile(temporary, "rw")
+      try {
+        written.setSize(0)
+        written.writeAt(0, out)
+        written.sync()
+      } finally {
+        written.close()
+      }
+      handle.close()
+      temporary.moveTo(handle.path, overwrite = true)
+      remap
+    }
+  }
+}

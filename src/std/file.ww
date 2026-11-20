@@ -332,6 +332,13 @@ class RandomAccessFile : AutoCloseable {
   // The file's size now, in bytes.
   fun size() : int throws IOException => __io.fileSize(handle)
 
+  // Makes the file `size` bytes long: what is past it goes, and a file made longer is filled
+  // with zeros. An IllegalArgumentException for a size below 0, an IOException on a file opened
+  // to read.
+  fun setSize(size : int) throws IOException {
+    __io.resize(handle, size)
+  }
+
   // Returns once what was written is on the disk, not only in the system's memory.
   fun sync() throws IOException {
     __io.sync(handle)

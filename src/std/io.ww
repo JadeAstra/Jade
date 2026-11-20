@@ -486,6 +486,7 @@ external object __io {
   fun readInto(handle : any, position : int, into : Bytes, offset : int, count : int) : int throws IOException
   fun writeAt(handle : any, position : int, data : Bytes, offset : int, count : int) throws IOException
   fun fileSize(handle : any) : int throws IOException
+  fun resize(handle : any, size : int) throws IOException
   fun sync(handle : any) throws IOException
   fun read(handle : any, count : int) : Bytes? throws IOException
   fun readAll(handle : any) : Bytes throws IOException

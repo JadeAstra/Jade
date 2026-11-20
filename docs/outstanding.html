@@ -100,7 +100,7 @@ pre code { background: none; padding: 0; }
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (forty)</li>
+<li><a href="#decide">Waiting for the user</a> (forty-two)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (fourteen)</li>
@@ -364,6 +364,20 @@ pre code { background: none; padding: 0; }
 <p class="status"><span class="label">Recommended</span> Open</p>
 <p>Measured 2026-11-19 on a document of 6.1 million characters (50,000 objects of numbers, strings and lists): <code>Json.read</code> 0.4 to 1.1 s and <code>Json.write</code> 0.95 to 1.9 s, against CPython's 44 ms and 37 ms (its module in C), 10 to 40 times as long. The same work varies by two from one run to the next, as earlier runs' values fill the heap. Writing a string checks for characters to escape with one regular expression and writes it whole where there are none; a search by regular expression for the end of each string read was slower than the loop over its characters, and is not kept.</p>
 <p>Ways, to be chosen: native code taking the loops over a string's characters (a template for "to the next of these characters", as the byte-mix and fill templates are); or a scan in C++, as XML's is, giving where each token is for WinterWolf to make the values from (<code>Xml.parse</code> works so). Both are to be measured against what the collector costs first.</p>
+<p>The user's word (2026-11-20): JSON's speed and the DB's are looked at after the emitter is built (<a href="emitter-plan.html">emitter-plan.html</a>).</p>
+</section>
+
+<section class="item" id="o-db">
+<h3>JadeLib's DB in the standard library</h3>
+<p class="status"><span class="label">Recommended</span> Done</p>
+<p>At the user's word (2026-11-19: "also add jadlib's DB to ww", the standard library; 2026-11-20: JadeLib's global helpers made protected members of <code>JadeDB</code>, as recommended, so that the standard library adds no <code>readInt</code> to every program's names). Built 2026-11-20 (0.9.5041) in <code>src/std/db.ww</code>, in WinterWolf: <code>JadeDB</code>, a file of records of one size that a table subclasses, with <code>appendRecord</code>, <code>updateRecordAt</code>, <code>removeRecordAt</code>, <code>truncate</code>, <code>readAllBytes</code>, <code>recordCount</code>, <code>forEachRecord</code>, <code>mapRecords</code>, <code>cached { }</code> values dropped by <code>invalidate()</code> and <code>clearIndex()</code>, <code>sync</code> and <code>close</code>; <code>JadeHeap</code>, blobs of any size each behind its 4-byte length, with <code>compact</code> writing the file again beside the old one, putting it on the disk and moving it over the old one in one step; and <code>BlobRef</code>. JadeLib's two test files ported, with more, in <code>tests/db.ww</code>.</p>
+<p>Where it differs from JadeLib's, for WinterWolf: the fields are <code>readInt32</code>, <code>readInt64</code>, <code>readFixed</code>, <code>writeInt32</code>, <code>writeInt64</code>, <code>writeFixed</code> and <code>writeBytes</code>, named by their widths as <code>Bytes.int32</code> is, since an int is 64 bits (JadeMail wrote its own <code>readLong</code> and <code>writeLong</code>); a record is made in memory and written in one step, zeros where the writer leaves off and an IllegalStateException where it writes past its size; <code>writeFixed</code> cuts text before a character that would not fit whole, where JadeLib's cut through it; <code>readRecordAt(index)</code> reads one record; a cached value is <code>cached { ... }.value</code>, as WinterWolf has no delegated properties; writes outside a record go to <code>position</code>, which appendMode puts at the end of the file when it is opened, as JadeLib's file pointer was. <code>RandomAccessFile.setSize</code> was added to the library for it (<code>SetFileInformationByHandle</code> on Windows, <code>ftruncate</code> on Linux).</p>
+</section>
+
+<section class="item" id="o-private-shadow">
+<h3>A superclass's private field hiding a subclass's method</h3>
+<p class="status"><span class="label">Recommended</span> Open</p>
+<p>Found 2026-11-20 as <code>tests/db.ww</code> gave its table a method <code>recordAt(index)</code>, the name of a private field of <code>JadeDB</code>'s: <code>ww check</code> takes it, and the call is an IllegalStateException as the program runs, "'recordAt' is private in class JadeDB: only code written in that class can use it". A field of the subclass's by that name is a checker error asking for <code>override</code>. A private member is the class's own business, so a subclass should be free to use its names, as in Kotlin: every class in the standard library a program subclasses (JadeDB, Image, ...) has private names a program cannot know. The test's method was renamed; the fix (the VM's member look-up, and the checker's override rule, leaving private members out) is to be made.</p>
 </section>
 
 <section class="item" id="o-snippy-52-left">

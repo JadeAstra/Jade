@@ -420,6 +420,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-bytesource-ww">bytesource.ww</a></li>
 <li><a href="#file-complex-ww">complex.ww</a></li>
 <li><a href="#file-core-ww">core.ww</a></li>
+<li><a href="#file-db-ww">db.ww</a></li>
 <li><a href="#file-errors-ww">errors.ww</a></li>
 <li><a href="#file-file-ww">file.ww</a></li>
 <li><a href="#file-fonts-ww">fonts.ww</a></li>
@@ -479,6 +480,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BitOrder"><code>BitOrder</code></a> (1)</li>
 <li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
 <li><a href="#BlendMode"><code>BlendMode</code></a> (1)</li>
+<li><a href="#BlobRef"><code>BlobRef</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
 <li><a href="#Bytes.inflate"><code>Bytes</code></a> (35)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
@@ -542,6 +544,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#InvocationTargetException"><code>InvocationTargetException</code></a> (1)</li>
 <li><a href="#Iterable"><code>Iterable</code></a> (2)</li>
 <li><a href="#Iterator"><code>Iterator</code></a> (3)</li>
+<li><a href="#JadeDB"><code>JadeDB</code></a> (28)</li>
+<li><a href="#JadeDB.Cached"><code>JadeDB.Cached</code></a> (3)</li>
+<li><a href="#JadeHeap"><code>JadeHeap</code></a> (8)</li>
 <li><a href="#Job"><code>Job</code></a> (15)</li>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
 <li><a href="#Json"><code>Json</code></a> (4)</li>
@@ -610,7 +615,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Program"><code>Program</code></a> (12)</li>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
 <li><a href="#RadialGradient"><code>RadialGradient</code></a> (2)</li>
-<li><a href="#RandomAccessFile"><code>RandomAccessFile</code></a> (10)</li>
+<li><a href="#RandomAccessFile"><code>RandomAccessFile</code></a> (11)</li>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
@@ -2470,6 +2475,146 @@ print(&quot;the map takes ${Program.memoryUsed - before} bytes&quot;)
 <p>Runs <code>builder</code> on a new StringBuilder, so that append(...) inside it builds the text, and gives the text.</p>
 </div>
 </section>
+<section class="file" id="file-db-ww">
+<h2>db.ww</h2>
+<h3>Record files (JadeDB) and blob files (JadeHeap)</h3>
+<p>A file of records all the same size, read whole and written one record at a time, and a file of blobs of any size beside it (JadeLib's DB). A table is a class extending JadeDB that says how big its records are and how each is laid out:</p>
+<pre>data Item(val name : string, val price : int)
+</pre>
+<pre>class Items(path : string) : JadeDB(path) {
+  override val recordSize = 20                  // a name of 16 bytes, then a 4-byte price
+  private val every = cached { mapRecords { bytes, at -&gt; Item(readFixed(bytes, at, 16), readInt32(bytes, at + 16)) } }
+  val all : List&lt;Item&gt;
+    get() =&gt; every.value
+  fun add(item : Item) { appendRecord { writeFixed(item.name, 16); writeInt32(item.price) } }
+  fun setPrice(index : int, item : Item) { updateRecordAt(index) { writeFixed(item.name, 16); writeInt32(item.price) } }
+}
+</pre>
+<p>Numbers are kept big-endian, text as UTF-8 in a field of a fixed size. The file is opened on first use and stays open; close() lets go of it (Windows will not delete or replace an open file), and the next read or write opens it again. Each change is made holding the table's lock, so threads can share a table; a subclass doing more than one step with the file holds <code>lock</code> itself. A cached { } value is dropped whenever a record is written, made again when next asked for.</p>
+<div class="entry" id="BlobRef"><code class="sig">data BlobRef(val offset : int, val length : int)</code><a class="anchor" href="#BlobRef">#</a>
+<p>A blob kept in a JadeHeap: where its 4-byte length is in the file, and how long it is.</p>
+</div>
+<div class="entry" id="JadeDB"><code class="sig">abstract class JadeDB</code><a class="anchor" href="#JadeDB">#</a>
+<p>A file of records of <code>recordSize</code> bytes each, one after another: subclassed for each table. With appendMode true, writeInt32 and the other writes outside appendRecord and updateRecordAt go to the end of the file, as they do in a file opened to append; otherwise to <code>position</code>.</p>
+</div>
+<div class="entry member" id="JadeDB.dbFile"><code class="sig">protected val dbFile : FilePath</code><a class="anchor" href="#JadeDB.dbFile">#</a>
+<p>The file the records are kept in.</p>
+</div>
+<div class="entry member" id="JadeDB.recordSize"><code class="sig">abstract val recordSize : int</code><a class="anchor" href="#JadeDB.recordSize">#</a>
+<p>How many bytes each record takes.</p>
+</div>
+<div class="entry member" id="JadeDB.position"><code class="sig">protected var position</code><a class="anchor" href="#JadeDB.position">#</a>
+<p>Where the writes outside appendRecord and updateRecordAt go in the file: each moves it on past what it wrote. With appendMode, the end of the file whenever it is opened.</p>
+</div>
+<div class="entry member" id="JadeDB.lock"><code class="sig">protected val lock : Lock</code><a class="anchor" href="#JadeDB.lock">#</a>
+<p>The lock every change holds: a subclass holds it too for anything of more than one step with <code>file</code> or <code>position</code>.</p>
+</div>
+<div class="entry member" id="JadeDB.file"><code class="sig">protected val file : RandomAccessFile</code><a class="anchor" href="#JadeDB.file">#</a>
+<p>The file, open to read and write, made if it is not there; opened again after close(). Only with <code>lock</code> held.</p>
+</div>
+<div class="entry member" id="JadeDB.exists"><code class="sig">fun exists() : bool</code><a class="anchor" href="#JadeDB.exists">#</a>
+<p>Whether the file is there.</p>
+</div>
+<div class="entry member" id="JadeDB.sync"><code class="sig">fun sync() throws IOException</code><a class="anchor" href="#JadeDB.sync">#</a>
+<p>Returns once what was written is on the disk; nothing if nothing was written.</p>
+</div>
+<div class="entry member" id="JadeDB.close"><code class="sig">fun close()</code><a class="anchor" href="#JadeDB.close">#</a>
+<p>Lets go of the file, which Windows wants before it is deleted or replaced. The next read or write opens it again.</p>
+</div>
+<div class="entry member" id="JadeDB.appendRecord"><code class="sig">protected fun appendRecord(writer : () -&gt; unit throws IOException) throws IOException</code><a class="anchor" href="#JadeDB.appendRecord">#</a>
+<p>Adds a record at the end of the file: <code>writer</code> writes its fields with writeInt32, writeInt64, writeFixed and writeBytes, in order. What it leaves of the record's bytes is zeros; writing past them is an IllegalStateException.</p>
+</div>
+<div class="entry member" id="JadeDB.updateRecordAt"><code class="sig">protected fun updateRecordAt(index : int, writer : () -&gt; unit throws IOException) throws IOException</code><a class="anchor" href="#JadeDB.updateRecordAt">#</a>
+<p>Writes the record at <code>index</code> over again, as appendRecord makes one. An index past the last record makes the file longer, with zeros between.</p>
+</div>
+<div class="entry member" id="JadeDB.truncate"><code class="sig">protected fun truncate() throws IOException</code><a class="anchor" href="#JadeDB.truncate">#</a>
+<p>Takes every record out: the file left empty.</p>
+</div>
+<div class="entry member" id="JadeDB.removeRecordAt"><code class="sig">protected fun removeRecordAt(index : int) throws IOException</code><a class="anchor" href="#JadeDB.removeRecordAt">#</a>
+<p>Takes out the record at <code>index</code>, those after it moved down one, in the order they were. Nothing for an index with no record.</p>
+</div>
+<div class="entry member" id="JadeDB.readAllBytes"><code class="sig">protected fun readAllBytes() : Bytes throws IOException</code><a class="anchor" href="#JadeDB.readAllBytes">#</a>
+<p>Every byte of the file: none if it is not there, which does not make it.</p>
+</div>
+<div class="entry member" id="JadeDB.readRecordAt"><code class="sig">protected fun readRecordAt(index : int) : Bytes? throws IOException</code><a class="anchor" href="#JadeDB.readRecordAt">#</a>
+<p>The record at <code>index</code>, or null where there is none.</p>
+</div>
+<div class="entry member" id="JadeDB.recordCount"><code class="sig">protected fun recordCount() : int throws IOException</code><a class="anchor" href="#JadeDB.recordCount">#</a>
+<p>How many whole records the file holds: 0 if it is not there.</p>
+</div>
+<div class="entry member" id="JadeDB.forEachRecord"><code class="sig">protected fun forEachRecord(action : (Bytes, int) -&gt; unit throws IOException) throws IOException</code><a class="anchor" href="#JadeDB.forEachRecord">#</a>
+<p>Runs <code>action</code> for each record, with the file's bytes and where the record starts in them.</p>
+</div>
+<div class="entry member" id="JadeDB.mapRecords"><code class="sig">protected fun &lt;T&gt; mapRecords(transform : (Bytes, int) -&gt; T? throws IOException) : open List&lt;T&gt; throws IOException</code><a class="anchor" href="#JadeDB.mapRecords">#</a>
+<p>What <code>transform</code> makes of each record, as forEachRecord gives them, nulls left out.</p>
+</div>
+<div class="entry member" id="JadeDB.readInt32"><code class="sig">protected fun readInt32(bytes : Bytes, at : int) : int</code><a class="anchor" href="#JadeDB.readInt32">#</a>
+<p>The signed 32-bit number at <code>at</code>, big-endian.</p>
+</div>
+<div class="entry member" id="JadeDB.readInt64"><code class="sig">protected fun readInt64(bytes : Bytes, at : int) : int</code><a class="anchor" href="#JadeDB.readInt64">#</a>
+<p>The signed 64-bit number at <code>at</code>, big-endian.</p>
+</div>
+<div class="entry member" id="JadeDB.readFixed"><code class="sig">protected fun readFixed(bytes : Bytes, at : int, size : int) : string</code><a class="anchor" href="#JadeDB.readFixed">#</a>
+<p>The text in the <code>size</code> bytes at <code>at</code>, as writeFixed keeps it: UTF-8, the zeros and spaces after it left off.</p>
+</div>
+<div class="entry member" id="JadeDB.writeInt32"><code class="sig">protected fun writeInt32(value : int) throws IOException</code><a class="anchor" href="#JadeDB.writeInt32">#</a>
+<p>Writes <code>value</code> as a signed 32-bit number, big-endian: an ArithmeticException where it does not fit.</p>
+</div>
+<div class="entry member" id="JadeDB.writeInt64"><code class="sig">protected fun writeInt64(value : int) throws IOException</code><a class="anchor" href="#JadeDB.writeInt64">#</a>
+<p>Writes <code>value</code> as a signed 64-bit number, big-endian.</p>
+</div>
+<div class="entry member" id="JadeDB.writeFixed"><code class="sig">protected fun writeFixed(text : string, size : int) throws IOException</code><a class="anchor" href="#JadeDB.writeFixed">#</a>
+<p>Writes <code>text</code> as UTF-8 in exactly <code>size</code> bytes: zeros after it, or cut short where it is longer, before the character that would not fit whole.</p>
+</div>
+<div class="entry member" id="JadeDB.writeBytes"><code class="sig">protected fun writeBytes(data : Bytes) throws IOException</code><a class="anchor" href="#JadeDB.writeBytes">#</a>
+<p>Writes <code>data</code> as it is: into the record appendRecord or updateRecordAt is making, or else into the file at <code>position</code>.</p>
+</div>
+<div class="entry member" id="JadeDB.cached"><code class="sig">protected fun &lt;T&gt; cached(initializer : () -&gt; T throws IOException) : JadeDB.Cached&lt;T&gt;</code><a class="anchor" href="#JadeDB.cached">#</a>
+<p>A value worked out from the file when first asked for, and kept until a record is written or invalidate() is called; then worked out again when next asked for.</p>
+<pre>private val names = cached { mapRecords { bytes, at -&gt; readFixed(bytes, at, 16) } }
+... names.value ...
+</pre>
+</div>
+<div class="entry member" id="JadeDB.Cached"><code class="sig">class Cached&lt;T&gt;</code><a class="anchor" href="#JadeDB.Cached">#</a>
+<p>A value cached { } keeps.</p>
+</div>
+<div class="entry member member2" id="JadeDB.Cached.value"><code class="sig">val value : T</code><a class="anchor" href="#JadeDB.Cached.value">#</a>
+<p>The value: worked out now if it is not kept, once however many threads ask.</p>
+</div>
+<div class="entry member member2" id="JadeDB.Cached.reset"><code class="sig">fun reset()</code><a class="anchor" href="#JadeDB.Cached.reset">#</a>
+<p>Drops the value: the next <code>value</code> works it out again.</p>
+</div>
+<div class="entry member" id="JadeDB.invalidate"><code class="sig">fun invalidate()</code><a class="anchor" href="#JadeDB.invalidate">#</a>
+<p>Drops every cached { } value and calls clearIndex(), so what is next asked for is read from the file again. Writing a record does it; call it after the file is changed some other way.</p>
+</div>
+<div class="entry member" id="JadeDB.clearIndex"><code class="sig">protected fun clearIndex()</code><a class="anchor" href="#JadeDB.clearIndex">#</a>
+<p>For a subclass's own indexes: dropped here, made again when next wanted.</p>
+</div>
+<div class="entry" id="JadeHeap"><code class="sig">class JadeHeap</code><a class="anchor" href="#JadeHeap">#</a>
+<p>Blobs of any size in one file, each kept as its 4-byte big-endian length and then its bytes: append gives a BlobRef to read it back by. A blob is let go of by dropping its BlobRef; compact makes the file again with only the blobs still wanted.</p>
+</div>
+<div class="entry member" id="JadeHeap.exists"><code class="sig">fun exists() : bool</code><a class="anchor" href="#JadeHeap.exists">#</a>
+<p>Whether the file is there.</p>
+</div>
+<div class="entry member" id="JadeHeap.append"><code class="sig">fun append(payload : Bytes) : BlobRef throws IOException</code><a class="anchor" href="#JadeHeap.append">#</a>
+<p>Adds <code>payload</code> at the end: the BlobRef to read it by.</p>
+</div>
+<div class="entry member" id="JadeHeap.read"><code class="sig">fun read(ref : BlobRef) : Bytes throws IOException</code><a class="anchor" href="#JadeHeap.read">#</a>
+<p>The blob <code>ref</code> stands for. An IOException where the file holds no blob of that length there.</p>
+</div>
+<div class="entry member" id="JadeHeap.clear"><code class="sig">fun clear() throws IOException</code><a class="anchor" href="#JadeHeap.clear">#</a>
+<p>Takes every blob out: the file left empty, before it is filled again.</p>
+</div>
+<div class="entry member" id="JadeHeap.sync"><code class="sig">fun sync() throws IOException</code><a class="anchor" href="#JadeHeap.sync">#</a>
+<p>Returns once what was written is on the disk; nothing if nothing was written.</p>
+</div>
+<div class="entry member" id="JadeHeap.close"><code class="sig">fun close()</code><a class="anchor" href="#JadeHeap.close">#</a>
+<p>Lets go of the file, which Windows wants before it is deleted or replaced. The next read or append opens it again.</p>
+</div>
+<div class="entry member" id="JadeHeap.compact"><code class="sig">fun compact(live : List&lt;BlobRef&gt;) : Map&lt;BlobRef, BlobRef&gt; throws IOException</code><a class="anchor" href="#JadeHeap.compact">#</a>
+<p>Makes the file again with only the blobs of <code>live</code>, in that order, the space of the rest given back: gives each one's new BlobRef by its old one. The new file is written beside the old one (its name with &quot;.compact&quot; after it), put on the disk, and then moved over the old one in one step, so a crash leaves one or the other whole.</p>
+</div>
+</section>
 <section class="file" id="file-errors-ww">
 <h2>errors.ww</h2>
 <h3>What can be thrown</h3>
@@ -2792,6 +2937,9 @@ edit.close()
 </div>
 <div class="entry member" id="RandomAccessFile.size"><code class="sig">fun size() : int throws IOException</code><a class="anchor" href="#RandomAccessFile.size">#</a>
 <p>The file's size now, in bytes.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.setSize"><code class="sig">fun setSize(size : int) throws IOException</code><a class="anchor" href="#RandomAccessFile.setSize">#</a>
+<p>Makes the file <code>size</code> bytes long: what is past it goes, and a file made longer is filled with zeros. An IllegalArgumentException for a size below 0, an IOException on a file opened to read.</p>
 </div>
 <div class="entry member" id="RandomAccessFile.sync"><code class="sig">fun sync() throws IOException</code><a class="anchor" href="#RandomAccessFile.sync">#</a>
 <p>Returns once what was written is on the disk, not only in the system's memory.</p>

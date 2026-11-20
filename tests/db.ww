@@ -1,0 +1,228 @@
+// JadeDB and JadeHeap (JadeLib's DB in the standard library): JadeLib's JadeDBTest and
+// JadeDbExtensionsTest, and what the port adds (64-bit fields, readRecordAt, writeFixed keeping
+// characters whole, records checked for size, RandomAccessFile.setSize).
+
+val dir = FilePath.createTempDirectory("wwdb")
+
+// A record: a name of 16 bytes, then a 4-byte value; written in append mode outside records.
+class ItemDb(path : string) : JadeDB(path, true) {
+  override val recordSize = 20
+  var cacheBuilds = 0
+  private val items = cached {
+    cacheBuilds += 1
+    mapRecords { bytes, at -> "${readFixed(bytes, at, 16)}=${readInt32(bytes, at + 16)}" }
+  }
+  val allItems : List<string>
+    get() => items.value
+
+  fun append(name : string, value : int) {
+    lock.useKey {
+      writeFixed(name, 16)
+      writeInt32(value)
+    }
+  }
+  fun count() : int => recordCount()
+  fun bytes() : Bytes => readAllBytes()
+  fun names() : List<string> {
+    val seen : open List<string> = []
+    forEachRecord { bytes, at -> seen.add(readFixed(bytes, at, 16)) }
+    return seen
+  }
+}
+
+// exists follows the file
+val e = ItemDb(dir.resolve("exists.db").text)
+print(e.exists())
+e.append("first", 1)
+print(e.exists())
+e.close()
+// expect: false
+// expect: true
+
+// written and read back through the file
+val rt = ItemDb(dir.resolve("items.db").text)
+rt.append("Longsword", 100)
+rt.append("Shield", 42)
+print("${rt.count()} ${rt.bytes().size}")
+print(rt.allItems)
+print(rt.names())
+// expect: 2 40
+// expect: ["Longsword=100", "Shield=42"]
+// expect: ["Longsword", "Shield"]
+
+// a file not there: no records, no bytes, and still not there
+val absent = ItemDb(dir.resolve("absent.db").text)
+print("${absent.count()} ${absent.bytes().size} ${absent.exists()}")
+// expect: 0 0 false
+
+// cached until invalidated
+val c = ItemDb(dir.resolve("cache.db").text)
+c.append("a", 1)
+val first = c.allItems
+val second = c.allItems
+print("${c.cacheBuilds} ${first == second}")
+c.append("b", 2)        // outside appendRecord: the cache is not told
+print(c.allItems)
+c.invalidate()
+print("${c.allItems} ${c.cacheBuilds}")
+c.close()
+rt.close()
+// expect: 1 true
+// expect: ["a=1"]
+// expect: ["a=1", "b=2"] 2
+
+// The fields: a table of every kind, made with appendRecord and the rest.
+class Tbl(path : string) : JadeDB(path) {
+  override val recordSize = 8
+  private val rowsKept = cached { mapRecords { b, at -> "${readInt32(b, at)}:${readInt32(b, at + 4)}" } }
+  fun add(id : int, value : int) { appendRecord { writeInt32(id); writeInt32(value) } }
+  fun setValue(index : int, id : int, value : int) { updateRecordAt(index) { writeInt32(id); writeInt32(value) } }
+  fun remove(index : int) { removeRecordAt(index) }
+  fun clear() { truncate() }
+  fun rows() : List<string> => rowsKept.value
+  fun rowAt(index : int) : Bytes? => readRecordAt(index)
+  fun tooLong() { appendRecord { writeInt64(1); writeInt32(2) } }
+  fun short() { appendRecord { writeInt32(9) } }
+  fun nested() { appendRecord { appendRecord { writeInt32(1) } } }
+}
+
+val t = Tbl(dir.resolve("t.db").text)
+t.add(0, 10); t.add(1, 20); t.add(2, 30)
+print(t.rows())
+t.setValue(1, 1, 99)
+print(t.rows())          // the write dropped the cached rows
+t.remove(0)
+print(t.rows())
+t.remove(5)              // no such record: nothing
+print(t.rows())
+print(t.rowAt(1)?.int32(4, true))
+print(t.rowAt(2))
+t.close()
+// expect: ["0:10", "1:20", "2:30"]
+// expect: ["0:10", "1:99", "2:30"]
+// expect: ["1:99", "2:30"]
+// expect: ["1:99", "2:30"]
+// expect: 30
+// expect: null
+
+// opened again after close
+val reopened = Tbl(dir.resolve("re.db").text)
+reopened.add(7, 70)
+reopened.sync()
+reopened.close()
+print(Tbl(dir.resolve("re.db").text).rows())
+reopened.add(8, 80)      // the closed table opens its file again
+print(reopened.rows())
+reopened.close()
+// expect: ["7:70"]
+// expect: ["7:70", "8:80"]
+
+// a record is its size: short ones end in zeros, long ones and one inside another are errors
+val sized = Tbl(dir.resolve("sized.db").text)
+sized.short()
+print(sized.rows())
+try { sized.tooLong() } catch (x : IllegalStateException) { print(x.message) }
+try { sized.nested() } catch (x : IllegalStateException) { print(x.message) }
+print(sized.rows())
+sized.clear()
+print("${sized.rows()} ${dir.resolve("sized.db").size()}")
+sized.close()
+// expect: ["9:0"]
+// expect: a record is 8 bytes: 4 more after 8 go past its end
+// expect: a record is being written already: appendRecord and updateRecordAt do not go one inside the other
+// expect: ["9:0"]
+// expect: [] 0
+
+// Fixed text and 64-bit numbers, read back from the bytes written.
+class Fields(path : string) : JadeDB(path) {
+  override val recordSize = 32
+  fun add(text : string, size : int, number : int) {
+    appendRecord {
+      writeFixed(text, size)
+      writeInt64(number)
+    }
+  }
+  fun text(index : int, size : int) : string => readFixed(readAllBytes(), index * recordSize, size)
+  fun number(index : int, size : int) : int => readInt64(readAllBytes(), index * recordSize + size)
+  fun raw(index : int) : Bytes => readRecordAt(index) ?: Bytes(0)
+}
+val f = Fields(dir.resolve("fields.db").text)
+f.add("héllo", 16, -12345)                    // more than one byte to a character, zeros after
+f.add("0123456789ABCDEFGHIJ", 8, 1 << 40)     // cut to 8 bytes
+f.add("hi  ", 10, 0)                          // spaces after it are let go of as zeros are
+f.add("aé", 2, int.minValue)                  // 'é' would not fit whole: cut before it
+print("${f.text(0, 16)} ${f.number(0, 16)}")
+print("${f.text(1, 8)} ${f.number(1, 8)}")
+print("[${f.text(2, 10)}]")
+print("${f.text(3, 2)} ${f.raw(3)[1]} ${f.number(3, 2)}")
+f.close()
+// expect: héllo -12345
+// expect: 01234567 1099511627776
+// expect: [hi]
+// expect: a 0 -9223372036854775808
+
+// writeInt32 is 32 bits
+val big = Tbl(dir.resolve("big.db").text)
+try { big.add(1 << 40, 0) } catch (x : ArithmeticException) { print("too big for 32 bits") }
+print(big.rows())
+big.close()
+// expect: too big for 32 bits
+// expect: []
+
+// ---- JadeHeap ----
+
+val heap = JadeHeap(dir.resolve("h.dat").text)
+print(heap.exists())
+val a = heap.append("hello".toBytes())
+val b = heap.append("a much longer payload!!".toBytes())
+val empty = heap.append(Bytes(0))
+print("${heap.read(a).decodeToString()} | ${heap.read(b).decodeToString()} | ${heap.read(empty).size}")
+print("$a $b")
+try { heap.read(BlobRef(1, 5)) } catch (x : IOException) { print("not a blob") }
+heap.close()
+// expect: false
+// expect: hello | a much longer payload!! | 0
+// expect: BlobRef(offset=0, length=5) BlobRef(offset=9, length=23)
+// expect: not a blob
+
+// compact: the space given back, the kept blobs moved, the dropped one not in the map
+val path = dir.resolve("h2.dat")
+val h2 = JadeHeap(path)
+val ka = h2.append("AAAA".toBytes())
+val kb = h2.append("BBBBBBBB".toBytes())
+val before = path.size()
+val remap = h2.compact([kb])
+val newB = remap[kb]!!
+print("${h2.read(newB).decodeToString()} $newB")
+print("${path.size() < before} ${ka in remap.keys} ${FilePath(path.text + ".compact").exists()}")
+// still written to and read after it
+val added = h2.append("MORE".toBytes())
+print("${h2.read(added).decodeToString()} ${h2.read(newB).decodeToString()} $added")
+h2.clear()
+print(path.size())
+h2.close()
+// expect: BBBBBBBB BlobRef(offset=0, length=8)
+// expect: true false false
+// expect: MORE BBBBBBBB BlobRef(offset=12, length=4)
+// expect: 0
+
+// ---- RandomAccessFile.setSize ----
+
+val r = RandomAccessFile(dir.resolve("sizes.bin"), "rw")
+r.writeAt(0, Bytes([1, 2, 3, 4, 5]))
+r.setSize(2)
+print("${r.size()} ${r.readAt(0, 10).toList()}")
+r.setSize(4)
+print("${r.size()} ${r.readAt(0, 10).toList()}")
+try { r.setSize(-1) } catch (x : IllegalArgumentException) { print(x.message) }
+r.close()
+val ro = RandomAccessFile(dir.resolve("sizes.bin"), "r")
+try { ro.setSize(0) } catch (x : IOException) { print("read-only file: IOException") }
+ro.close()
+// expect: 2 [1, 2]
+// expect: 4 [1, 2, 0, 0]
+// expect: a file's size is 0 or more, not -1
+// expect: read-only file: IOException
+
+print(dir.deleteRecursively())
+// expect: true

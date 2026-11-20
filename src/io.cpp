@@ -835,6 +835,18 @@ int64_t sizeOfOpen(Stream& s, std::string& error) {
     return size.QuadPart;
 }
 
+// Makes the open file `size` bytes long: cut, or grown with zeros.
+bool resizeOpen(Stream& s, int64_t size, std::string& error) {
+    Use use(s);
+    FILE_END_OF_FILE_INFO end{};
+    end.EndOfFile.QuadPart = size;
+    if (s.closed.load() || !SetFileInformationByHandle(s.handle, FileEndOfFileInfo, &end, sizeof end)) {
+        error = s.closed.load() ? "the file is closed" : "cannot set the size: " + systemMessage(GetLastError());
+        return false;
+    }
+    return true;
+}
+
 bool syncOpen(Stream& s, std::string& error) {
     Use use(s);
     if (s.closed.load() || !FlushFileBuffers(s.handle)) {
@@ -1323,6 +1335,16 @@ int64_t sizeOfOpen(Stream& s, std::string& error) {
         return -1;
     }
     return static_cast<int64_t>(info.st_size);
+}
+
+// Makes the open file `size` bytes long: cut, or grown with zeros.
+bool resizeOpen(Stream& s, int64_t size, std::string& error) {
+    Use use(s);
+    if (s.closed.load() || ::ftruncate(s.fd, static_cast<off_t>(size)) != 0) {
+        error = s.closed.load() ? "the file is closed" : std::string("cannot set the size: ") + std::strerror(errno);
+        return false;
+    }
+    return true;
 }
 
 bool syncOpen(Stream& s, std::string& error) {
@@ -1847,6 +1869,19 @@ void registerIo(VM& vm) {
                            [out](VM& vm) -> Value {
                                if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(out->number);
+                           });
+    });
+
+    // resize(handle, size): the file made `size` bytes long, cut or grown with zeros.
+    def("resize", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        const int64_t size = vm.toInt(args[1], "size");
+        if (size < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a file's size is 0 or more, not " + std::to_string(size));
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { resizeOpen(*s, size, out->error); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               return Value::null();
                            });
     });
 
