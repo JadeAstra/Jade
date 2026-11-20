@@ -170,6 +170,27 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li>Whatever else the measurement shows: a frame made with less (slots set to nothing that the function writes before it reads), the arguments' checks left out where the checker proved them.</li>
 </ol>
 <p>Gate: a call of a method not put in place at 6 ns or less in the VM.</p>
+<h4 id="op-p3-measured">Measured first (2026-11-20, 0.9.5047): the crossing, not the look-up</h4>
+<p>One body, too large to be put in place, called each way 3 million times (<code>calls.ww</code>, <code>calls2.ww</code> in the measurements), ns each time round:</p>
+<div class="table"><table>
+<thead><tr><th>Callee</th><th class="num">Body alone</th><th class="num">Function</th><th class="num">Method</th><th class="num">Override, interface</th></tr></thead>
+<tbody>
+<tr><td>an empty loop and a sum (its loop a region of its own), native code</td><td class="num">1.4</td><td class="num">22.3</td><td class="num">24.6</td><td class="num">24.8</td></tr>
+<tr><td>the same, the VM alone</td><td class="num">9.2</td><td class="num">16.0</td><td class="num">18.0</td><td class="num">18.0</td></tr>
+<tr><td>twelve sums (a whole function's region), native code</td><td class="num">4.6</td><td class="num">21.5</td><td class="num">22.7</td><td class="num"></td></tr>
+<tr><td>the same, whole-function regions off</td><td class="num">4.5</td><td class="num">34.3</td><td class="num">36.7</td><td class="num"></td></tr>
+</tbody></table></div>
+<ul>
+<li>Looking the method up by its name costs about 2 ns; an override or an interface nothing more than a method.</li>
+<li>In the VM a call costs about 7 ns. With native code it costs 17: the callee's region entered (<code>nativeEnter</code>: the region found among the function's, its context set up) and left again at its <code>RETURN</code>, which the VM does; a callee whose loop is a region of its own enters and leaves that too. Native code makes a call dearer than the VM does, which is why toww, whose loop is calls to methods with regions, gains nothing from it.</li>
+</ul>
+<p>So the work, in this order:</p>
+<ol>
+<li><strong>A whole function's region returns itself</strong>: its <code>RETURN</code> done in the region (the result where the caller wants it, the frame gone), the VM handed the caller's next instruction, not the region's way out to the VM's own <code>RETURN</code>.</li>
+<li><strong>A function's region entered cheaply</strong>: the start's word naming its region, not a search of the function's regions; the context's words that do not change from one call to the next (the VM, the tables, the units) set once for the frame's stack, not at every way in.</li>
+<li><strong>The look-up skipped</strong>: each <code>INVOKE</code> keeps the class it last met and the method found for it.</li>
+</ol>
+<p>Gate, in place of the one above: a call from native code to a method with a whole function's region at 8 ns or less over its body (<code>calls2.ww</code>'s method row, 22.7 ns, at 13 or less); the VM's own call no slower; toww measured.</p>
 
 <h2 id="op-p4">Part 4: objects made cheaply</h2>
 <p>Each object is made by its own <code>new</code> (the C++ heap's lock and search), linked into the collector's list, counted, and freed by its own <code>delete</code> when it is collected; its constructor is a call of its own. The work:</p>
