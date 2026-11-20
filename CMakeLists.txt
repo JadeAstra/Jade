@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 # M3.5 is 0.3.5, M4 is 0.4.0, M5 is 0.5.0, M6 is 0.6.0, M6.5 is 0.6.5, M6.6 is 0.6.6, M6.6.2 is
 # 0.6.6.2, M6.7 is 0.6.7, M7 is 0.7.0, M8 is 0.8.0, M9.5 (native code, docs/native-plan.html) is 0.9.5.
 # Between milestones each minor build counts up after it (the user, 2026-11-17): 0.9.5001, 0.9.5002...
-project(WinterWolf VERSION 0.9.5045 LANGUAGES CXX)
+project(WinterWolf VERSION 0.9.5046 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,6 +77,14 @@ add_library(ww_core OBJECT
   src/parallel.cpp
   src/run.cpp
   src/crypto/random.cpp
+  src/crypto/common.cpp
+  src/crypto/sha2.cpp
+  src/crypto/sha3.cpp
+  src/crypto/mac.cpp
+  src/crypto/argon2.cpp
+  src/crypto/aes_gcm.cpp
+  src/crypto/chacha_poly.cpp
+  src/crypto/api.cpp
 )
 add_library(ww_window OBJECT
   src/jade/platform_win.cpp

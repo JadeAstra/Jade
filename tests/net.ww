@@ -134,7 +134,6 @@ try { Dns.lookup("no-such-host.invalid") } catch (e : UnknownHostException) { pr
 // expect: cannot find host 'no-such-host.invalid' true
 try { Socket("no-such-host.invalid", 80) } catch (e : UnknownHostException) { print(e.message) }
 // expect: cannot find host 'no-such-host.invalid'
-print(Dns.localHostName.size > 0)                                         // expect: true
 val back = Dns.reverse(IpAddress.loopback)                                // whatever this machine calls itself, or null
 print(back == null or back!!.size > 0)                                    // expect: true
 

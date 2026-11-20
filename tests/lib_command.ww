@@ -3,7 +3,12 @@
 // Run by ww itself; a built program, started alone, has no ww to ask, and says what ww says.
 
 val command = Process.currentCommand()
-if (command.size < 2) {
+// What this test starts carries WW_LIB_COMMAND_CHILD, and a run that finds it starts nothing; and ww is started
+// only where the program running this is ww (2026-11-20, after a test that started itself ran the
+// machine out of memory).
+val asChild = {"WW_LIB_COMMAND_CHILD": "1"}
+if (Program.environment["WW_LIB_COMMAND_CHILD"] != null) {
+} else if (command.size < 2 or FilePath(command[0]).nameWithoutExtension != "ww") {
   print("true true")
   print("true true")
   print("73 true true")
@@ -17,8 +22,8 @@ if (command.size < 2) {
   val ww = command[0]
   val folder = FilePath.createTempDirectory("ww_lib")
   try {
-    val first = Process.run([ww, "lib", folder.text])
-    print(first.exitCode == 0, first.output.startsWith("Jade written to"))         // expect: true true
+    val first = Process.run([ww, "lib", folder.text], environment = asChild)
+    print(first.exitCode == 0, first.output.contains("Jade written to") and first.output.contains("Crypto written to"))   // expect: true true
     val files = folder.resolve("Jade").list().filter { it.name.endsWith(".ww") }
     print(files.size > 20, files.any { it.name == "Window.ww" })                   // expect: true true
 
@@ -26,29 +31,29 @@ if (command.size < 2) {
     val block = folder.resolve("Jade").resolve("Block.ww")
     val original = block.readText()
     block.writeText(original + "// changed\n")
-    val again = Process.run([ww, "lib", folder.text])
+    val again = Process.run([ww, "lib", folder.text], environment = asChild)
     print(again.exitCode, again.error.contains("is left as it is"), block.readText() != original)   // expect: 73 true true
 
     // --replace: ww's own written over the change, a file added kept.
     folder.resolve("Jade").resolve("Added.ww").writeText("// mine\n")
-    val replaced = Process.run([ww, "lib", folder.text, "--replace"])
+    val replaced = Process.run([ww, "lib", folder.text, "--replace"], environment = asChild)
     print(replaced.exitCode, block.readText() == original, folder.resolve("Jade").resolve("Added.ww").exists())   // expect: 0 true true
 
-    print(Process.run([ww, "lib", "a", "b"]).exitCode)                             // expect: 64
+    print(Process.run([ww, "lib", "a", "b"], environment = asChild).exitCode)                             // expect: 64
 
     // --std: the standard library's files, to be read, with the warning and a README saying so.
-    val std = Process.run([ww, "lib", "--std", folder.text])
+    val std = Process.run([ww, "lib", "--std", folder.text], environment = asChild)
     val stdFiles = folder.resolve("std").list()
     print(std.exitCode, stdFiles.any { it.name == "core.ww" }, std.error.contains("can't and won't use them"),
           folder.resolve("std").resolve("README.txt").readText().contains("for reading only"))   // expect: 0 true true true
 
     // --help: every command and option listed; more on one; an option two commands take, of each.
-    val help = Process.run([ww, "--help"]).output
+    val help = Process.run([ww, "--help"], environment = asChild).output
     print(["Commands:", "ww lib [<folder>] [options]", "--interpret", "ww --help settings"].all { help.contains(it) },
           help.indexOf("--replace") > help.indexOf("ww lib [<folder>]") and help.indexOf("--replace") < help.indexOf("ww doc"))   // expect: true true
-    val both = Process.run([ww, "--help", "--std"]).output
+    val both = Process.run([ww, "--help", "--std"], environment = asChild).output
     print(both.contains("(an option of ww check)"), both.contains("(an option of ww lib)"))   // expect: true true
-    print(Process.run([ww, "--help", "nothing-such"]).exitCode)                    // expect: 64
+    print(Process.run([ww, "--help", "nothing-such"], environment = asChild).exitCode)                    // expect: 64
   } finally {
     folder.deleteRecursively()
   }

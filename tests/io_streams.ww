@@ -20,6 +20,11 @@ if (Program.arguments.contains("slow")) {
   print("second")
   exit(0)
 }
+// A copy this test started carries WW_IO_STREAMS_CHILD: without a part to play it starts nothing,
+// least of all the test again (2026-11-20, after a test that started itself ran the machine out
+// of memory).
+if (Program.environment["WW_IO_STREAMS_CHILD"] != null) { exit(0) }
+val asChild = {"WW_IO_STREAMS_CHILD": "1"}
 
 // ---- Files a piece at a time ----
 val file = FilePath("io-streams-test.txt")
@@ -87,7 +92,7 @@ try { Process("no-such-program-xyz") } catch (e : IOException) { print(e.message
 try { Process(shell("exit", "exit"), input = toOutput) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: toOutput is for a program's errors, not its input
 
 // ---- A conversation over a program's pipes ----
-val echo = Process(Process.currentCommand() + ["echo"])
+val echo = Process(Process.currentCommand() + ["echo"], environment = asChild)
 print(echo.output.readLine(), echo.isAlive, echo.pid != Process.currentPid())   // expect: ready true true
 for word in ["hello", "naïve café", "with \"quotes\" and  spaces"] {
   echo.input.println(word)
@@ -100,7 +105,7 @@ print(echo.waitFor(20.milliseconds), echo.exitCode, echo.isAlive)   // expect: n
 echo.input.println("quit")
 print(echo.waitFor(), echo.output.readLine(), echo.isAlive)   // expect: 7 null false
 // A program that will not end by itself is ended.
-val endless = Process(Process.currentCommand() + ["echo"])
+val endless = Process(Process.currentCommand() + ["echo"], environment = asChild)
 endless.output.readLine()
 endless.kill()
 // Its exit code is the system's for a program ended: 1 on Windows, 128 and the signal's number elsewhere.
@@ -176,7 +181,7 @@ var ticks = 0
 val ticker = EventLoop.every(5.milliseconds) { ticks += 1 }
 task {
   try {
-    val slow = Process(Process.currentCommand() + ["slow"])
+    val slow = Process(Process.currentCommand() + ["slow"], environment = asChild)
     val before = ticks
     val lines = [slow.output.readLine(), slow.output.readLine(), slow.output.readLine()]
     print(lines, "the loop went on:", ticks - before > 3, "exit code", slow.waitFor())

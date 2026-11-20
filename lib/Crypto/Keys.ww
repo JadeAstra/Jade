@@ -1,0 +1,165 @@
+// ---- Message authentication and keys from secrets (networking plan, part 2, 2026-11-20) ----
+//
+//   val mac = Hmac.mac(Sha256(), key, message)              // 32 bytes
+//   val keys = Hkdf.derive(Sha256(), secret, salt, "app keys".toBytes(), 64)
+//   val stored = Argon2id.encode("correct horse")           // "$argon2id$v=19$m=65536,t=3,p=4$..."
+//   val ok = Argon2id.verify(stored, typed)
+
+// HMAC (RFC 2104): a MAC, a hash of a message that only those with the key can make, over any
+// hash but SHAKE. `hash` says which (Sha256(), Sha3(512)); what it has taken in is not used.
+//
+//   val h = Hmac(Sha256(), key)
+//   h.update(header).update(body)
+//   val tag = h.digest()
+class Hmac {
+  private var state : any
+  private var macSize : int
+
+  fun init(hash : Hash, key : Bytes) {
+    this.state = __crypto.macNew(hash.kind, key)
+    this.macSize = hash.size
+  }
+
+  // The size of a MAC in bytes, the hash's digest size.
+  val size : int
+    get() => macSize
+
+  static {
+    // The MAC of `data` with `key`, at once.
+    fun mac(hash : Hash, key : Bytes, data : Bytes) : Bytes => Hmac(hash, key).update(data).digest()
+  }
+
+  // Takes in `size` of the bytes from `offset`, and gives the HMAC, to take more.
+  fun update(data : Bytes, offset : int = 0, size : int = data.size - offset) : Hmac {
+    __crypto.macUpdate(state, data, offset, size)
+    return this
+  }
+  // The MAC of all taken in since it was made or last gave one; then it starts again, with
+  // the same key.
+  fun digest() : Bytes => __crypto.macFinish(state)
+  // Whether `mac` is the MAC of what was taken in, compared in a time that does not say how
+  // much of it matched; then it starts again.
+  fun verify(mac : Bytes) : bool => __crypto.equal(digest(), mac)
+  // Starts again, with the same key.
+  fun reset() {
+    __crypto.macReset(state)
+  }
+  // An HMAC in the same state, to go on with apart.
+  fun copy() : Hmac {
+    val made = Hmac(Sha256(), Bytes(0))
+    made.state = __crypto.macCopy(state)
+    made.macSize = macSize
+    return made
+  }
+}
+
+// HKDF (RFC 5869): keys made from a secret that is not itself a good key (a shared secret of a
+// key exchange, say), with HMAC. extract() concentrates the secret into a key of the hash's
+// size; expand() makes as many bytes as are wanted from such a key, `info` telling apart keys
+// made for different uses.
+object Hkdf {
+  // The pseudorandom key: HMAC of the secret, keyed by the salt (zeros of the hash's size
+  // where it has none).
+  fun extract(hash : Hash, secret : Bytes, salt : Bytes? = null) : Bytes {
+    val key = salt == null or salt!!.size == 0 ? Bytes(hash.size) : salt!!
+    return Hmac.mac(hash, key, secret)
+  }
+  // `size` bytes made from the pseudorandom key and `info`: at most 255 times the hash's size.
+  fun expand(hash : Hash, key : Bytes, info : Bytes? = null, size : int = hash.size) : Bytes {
+    if (size < 0 or size > 255 * hash.size) {
+      throw IllegalArgumentException("HKDF gives 0 to ${255 * hash.size} bytes with this hash, not $size")
+    }
+    val out = Bytes(size)
+    val mac = Hmac(hash, key)
+    var previous = Bytes(0)
+    var made = 0
+    var counter = 1
+    while (made < size) {
+      mac.update(previous)
+      if (info != null) { mac.update(info!!) }
+      mac.update(Bytes([counter]))
+      previous = mac.digest()
+      val now = Math.min(previous.size, size - made)
+      out.copyFrom(previous, 0, 1, made, 1, now)
+      made += now
+      counter++
+    }
+    return out
+  }
+  // extract, then expand: `size` bytes from the secret.
+  fun derive(hash : Hash, secret : Bytes, salt : Bytes? = null, info : Bytes? = null, size : int = hash.size) : Bytes =>
+    expand(hash, extract(hash, secret, salt), info, size)
+}
+
+// PBKDF2 (RFC 8018) with HMAC: a key from a password, made slow by `iterations` to make guessing
+// costly. For new passwords Argon2id is better; PBKDF2 is for what was stored with it.
+object Pbkdf2 {
+  // `size` bytes from the password and salt. A text password is taken as UTF-8.
+  fun derive(hash : Hash, password : Bytes | string, salt : Bytes, iterations : int, size : int = hash.size) : Bytes =>
+    __crypto.pbkdf2(hash.kind, __secretBytes(password), salt, iterations, size)
+}
+
+// Argon2id (RFC 9106): the password hash to use for new passwords, slow and needing a lot of
+// memory, so that guessing many passwords at once costs as much as it can. The defaults are the
+// RFC's second recommendation: 3 passes over 64 MiB in 4 lanes. Its time grows with
+// `iterations` and `memory` (in KiB); the work waits on the thread it runs on, as a read does.
+object Argon2id {
+  // The hash of `size` bytes (a key, or for storing), of the password with the salt (16 random
+  // bytes is right), and if given a secret key kept apart from the store and data to bind in.
+  fun hash(password : Bytes | string, salt : Bytes, iterations : int = 3, memory : int = 65536, parallelism : int = 4, size : int = 32,
+           secret : Bytes? = null, data : Bytes? = null) : Bytes =>
+    __crypto.argon2id(__secretBytes(password), salt, secret, data, iterations, memory, parallelism, size)
+
+  // The password hashed with a new random salt, as the text password stores keep, in the PHC
+  // string form: "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>", in Base64 without padding.
+  fun encode(password : Bytes | string, iterations : int = 3, memory : int = 65536, parallelism : int = 4) : string {
+    val salt = SecureRandom.bytes(16)
+    val digest = hash(password, salt, iterations, memory, parallelism, 32)
+    return "\$argon2id\$v=19\$m=$memory,t=$iterations,p=$parallelism\$${__unpadded(Base64.encode(salt))}\$${__unpadded(Base64.encode(digest))}"
+  }
+
+  // Whether the password is the one `encoded` (as encode() writes it) was made from, compared
+  // in a time that does not say how much matched. An IllegalArgumentException where `encoded`
+  // is not an Argon2id string of version 19.
+  fun verify(encoded : string, password : Bytes | string) : bool {
+    val parts = encoded.split('$')
+    if (parts.size != 6 or parts[0] != "" or parts[1] != "argon2id" or parts[2] != "v=19") {
+      throw IllegalArgumentException("not an Argon2id hash of version 19: $encoded")
+    }
+    var memory = -1
+    var iterations = -1
+    var parallelism = -1
+    for (setting in parts[3].split(',')) {
+      val pair = setting.split('=')
+      val value = pair.size == 2 ? pair[1].toIntOrNull() : null
+      if (value == null) { throw IllegalArgumentException("not an Argon2id setting: $setting") }
+      when (pair[0]) {
+        "m" -> { memory = value!! }
+        "t" -> { iterations = value!! }
+        "p" -> { parallelism = value!! }
+        else -> throw IllegalArgumentException("not an Argon2id setting: $setting")
+      }
+    }
+    if (memory < 0 or iterations < 0 or parallelism < 0) { throw IllegalArgumentException("an Argon2id hash names m, t and p: $encoded") }
+    val salt = Base64.decode(parts[4])
+    val expected = Base64.decode(parts[5])
+    val digest = hash(password, salt, iterations, memory, parallelism, expected.size)
+    return __crypto.equal(digest, expected)
+  }
+}
+
+// BLAKE2b (RFC 7693): a fast hash of 1 to 64 bytes, keyed (a MAC) by up to 64 bytes or not.
+object Blake2b {
+  // The digest of `size` bytes of `data`, with `key` if given.
+  fun hash(data : Bytes, size : int = 64, key : Bytes? = null) : Bytes => __crypto.blake2b(data, size, key)
+}
+
+// A password given as text, as UTF-8; as bytes, as it is.
+fun __secretBytes(password : Bytes | string) : Bytes => password is string ? (password as string).toBytes() : password as Bytes
+
+// Base64 without its = padding.
+fun __unpadded(text : string) : string {
+  var end = text.size
+  while (end > 0 and text[end - 1] == '=') { end-- }
+  return text[0..<end]
+}

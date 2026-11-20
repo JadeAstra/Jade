@@ -4,7 +4,12 @@
 // no ww to ask, and says what ww says.
 
 val command = Process.currentCommand()
-if (command.size < 2) {
+// What this test starts carries WW_PROFILE_CHILD, and a run that finds it starts nothing; and ww is started
+// only where the program running this is ww (2026-11-20, after a test that started itself ran the
+// machine out of memory).
+val asChild = {"WW_PROFILE_CHILD": "1"}
+if (Program.environment["WW_PROFILE_CHILD"] != null) {
+} else if (command.size < 2 or FilePath(command[0]).nameWithoutExtension != "ww") {
   print("hot function found")
   print("stacks written")
 } else {
@@ -34,7 +39,7 @@ while clock() - started < 0.4 {
 print(sum > 0)
 """)
   val report = dir.resolve("report.txt")
-  val run = Process.run([ww, "--profile=" + report.text, program.text], directory = dir)
+  val run = Process.run([ww, "--profile=" + report.text, program.text], directory = dir, environment = asChild)
   val text = report.readText()
   // Every sample is in busyWork or helper, called from the script's loop.
   val byTotal = text.substringAfter("Functions, by total time").lines().filter { it.contains("%") }

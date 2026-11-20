@@ -2118,7 +2118,11 @@ void renumber(FunctionProto& f, const Renumbering& r, VM& vm) {
             case Op::GetGlobal:
             case Op::SetGlobal:
             case Op::DefineGlobal:
-            case Op::DefineTypedGlobal: first(r.global); break;
+            case Op::DefineTypedGlobal:
+            case Op::PlaceGlobal:     // a global reached by a body put in place of its call
+            case Op::JumpIfNotClass:  // the class a body put in place was made for
+                first(r.global);
+                break;
             case Op::ObjectClass:
             case Op::StoreClass:
             case Op::ObjectClassTyped:
@@ -2250,7 +2254,9 @@ int globalOperand(Op op, int first) {
         case Op::GetGlobal:
         case Op::SetGlobal:
         case Op::DefineGlobal:
-        case Op::DefineTypedGlobal: return 1;
+        case Op::DefineTypedGlobal:
+        case Op::PlaceGlobal:
+        case Op::JumpIfNotClass: return 1;
         case Op::ObjectClass:
         case Op::StoreClass:
         case Op::ObjectClassTyped:

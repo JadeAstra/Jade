@@ -25,6 +25,7 @@
 #include <windows.h>
 #else
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -40,6 +41,8 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 extern char** environ;
 #endif
@@ -356,6 +359,67 @@ std::string systemMessage(DWORD code) {
     return message;
 }
 
+// A program started from this one and every program it starts in turn (2026-11-20), held in a
+// job object: what is started inside it is in it from its first instruction, so the whole tree
+// is ended in one step (TerminateJobObject), with nothing slipping out between finding a process
+// and ending it, as a tree walked and killed one process at a time lets a fast chain do. With
+// limits, the system holds the tree to them together (memory, and processes at once), and a
+// thread waiting on the job's reports ends the tree as soon as it goes past one; and the tree is
+// ended with this program, however it ends.
+struct Tree {
+    HANDLE job = nullptr;
+    HANDLE port = nullptr;     // where the job reports; with limits only
+    std::atomic<int> past{0};  // the limit it went past: 1 memory, 2 processes
+    std::thread watcher;
+
+    void end() { TerminateJobObject(job, 1); }
+    ~Tree() {
+        if (port != nullptr) CloseHandle(port);  // the watcher's wait returns
+        if (watcher.joinable()) watcher.join();
+        if (job != nullptr) CloseHandle(job);  // with limits, ends what is left of the tree
+    }
+};
+
+// A job for a program about to start; null where the system makes none. `memory` (bytes) and
+// `processes` above 0 are limits for the whole tree.
+std::shared_ptr<Tree> makeTree(int64_t memory, int64_t processes) {
+    auto tree = std::make_shared<Tree>();
+    tree->job = CreateJobObjectW(nullptr, nullptr);
+    if (tree->job == nullptr) return nullptr;
+    if (memory <= 0 && processes <= 0) return tree;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (memory > 0) {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+        limits.JobMemoryLimit = static_cast<SIZE_T>(memory);
+    }
+    if (processes > 0) {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        limits.BasicLimitInformation.ActiveProcessLimit = static_cast<DWORD>(std::min<int64_t>(processes, 0x7FFFFFFF));
+    }
+    tree->port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT link{tree->job, tree->port};
+    if (!SetInformationJobObject(tree->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) || tree->port == nullptr ||
+        !SetInformationJobObject(tree->job, JobObjectAssociateCompletionPortInformation, &link, sizeof(link)))
+        return nullptr;
+    Tree* watched = tree.get();
+    tree->watcher = std::thread([watched] {
+        DWORD message = 0;
+        ULONG_PTR key = 0;
+        LPOVERLAPPED overlapped = nullptr;
+        while (GetQueuedCompletionStatus(watched->port, &message, &key, &overlapped, INFINITE)) {
+            if (message == JOB_OBJECT_MSG_JOB_MEMORY_LIMIT || message == JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT) {
+                watched->past = 1;
+                watched->end();
+            } else if (message == JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT) {
+                if (watched->past == 0) watched->past = 2;
+                watched->end();
+            }
+        }
+    });
+    return tree;
+}
+
 // Something that can be read from, written to, waited for or closed: a file, one end of a
 // pipe, a socket, a listening socket, a process. Programs know each by a number.
 struct Stream {
@@ -368,6 +432,8 @@ struct Stream {
     std::string unixPath;
     bool removesFile = false;
     DWORD pid = 0;
+    // A process's job: it and what it starts, ended together (2026-11-20); null where there is none.
+    std::shared_ptr<Tree> tree;
 
     std::atomic<bool> closed{false};
     std::atomic<int> users{0};  // threads inside a system call on it
@@ -425,6 +491,7 @@ struct Stream {
             if (removesFile) DeleteFileW(widen(unixPath).c_str());
             return;
         }
+        tree.reset();  // with limits, what is left of the tree ends with it
         if (handle == INVALID_HANDLE_VALUE) return;
         while (users.load() > 0) {
             CancelIoEx(handle, nullptr);
@@ -512,6 +579,17 @@ bool rawWrite(Stream& s, const char* data, size_t size, std::string& error) {
 
 // ---- POSIX: streams (G56) ----
 
+// A program started from this one and every program it starts in turn (2026-11-20). These systems
+// have no job object to hold a tree: it is found from each process's parent in /proc, and ended
+// by stopping every process in it (SIGSTOP, so that none starts another), finding the tree again
+// until nothing new is in it, and then killing them all (endTree). With limits, a thread looks at
+// the limited trees ten times a second and ends one that has more processes, or more memory
+// resident, than it may; and the limited trees are ended as this program ends normally.
+struct Tree {
+    int64_t memory = 0, processes = 0;
+    std::atomic<int> past{0};  // the limit it went past: 1 memory, 2 processes
+};
+
 // What the system has to say about an error number.
 std::string systemMessage(int code) {
     std::string message = std::strerror(code);
@@ -530,6 +608,8 @@ struct Stream {
     std::string unixPath;
     bool removesFile = false;
     pid_t pid = 0;
+    // A process's limits and what it went past (2026-11-20); null for one started without limits.
+    std::shared_ptr<Tree> tree;
     int readTimeout = 0;  // a socket's, in ms; 0 for none
 
     std::atomic<bool> closed{false};
@@ -762,6 +842,9 @@ struct Spawn {
     std::string directory;
     std::string modes[3];
     Value environment;
+    // Limits for the program and all it starts, together (2026-11-20): bytes of memory and processes at
+    // once; 0 for none.
+    int64_t memory = 0, processes = 0;
 };
 
 [[noreturn]] void badRedirect(VM& vm, const std::string& mode) {
@@ -1023,8 +1106,14 @@ std::array<std::shared_ptr<Stream>, 4> startProcess(VM& vm, const Spawn& spawn) 
     startup.StartupInfo.hStdError = inherited[2];
     startup.lpAttributeList = attributes;
 
+    // The job it and what it starts are held in; with limits, it must be had. The program starts
+    // suspended, is put in the job, and only then runs, so nothing it starts is outside.
+    std::shared_ptr<Tree> tree = makeTree(spawn.memory, spawn.processes);
+    const bool limited = spawn.memory > 0 || spawn.processes > 0;
+    if (limited && tree == nullptr) throw ioError(vm, "cannot start '" + program + "' within limits: " + systemMessage(GetLastError()));
     // A program without a console of its own does not make one appear for what it starts.
-    const DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | (GetConsoleWindow() == nullptr ? CREATE_NO_WINDOW : 0);
+    const DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | (GetConsoleWindow() == nullptr ? CREATE_NO_WINDOW : 0) |
+                        (tree != nullptr ? CREATE_SUSPENDED : 0);
     PROCESS_INFORMATION info{};
     std::vector<wchar_t> line(commandLine.begin(), commandLine.end());
     line.push_back(L'\0');
@@ -1033,12 +1122,24 @@ std::array<std::shared_ptr<Stream>, 4> startProcess(VM& vm, const Spawn& spawn) 
     const DWORD failure = started ? 0 : GetLastError();
     DeleteProcThreadAttributeList(attributes);
     if (!started) throw ioError(vm, "cannot start '" + program + "': " + systemMessage(failure));
+    if (tree != nullptr && !AssignProcessToJobObject(tree->job, info.hProcess)) {
+        const DWORD why = GetLastError();
+        if (limited) {
+            TerminateProcess(info.hProcess, 1);
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+            throw ioError(vm, "cannot start '" + program + "' within limits: " + systemMessage(why));
+        }
+        tree = nullptr;  // ended alone, as before jobs
+    }
+    ResumeThread(info.hThread);
     CloseHandle(info.hThread);
 
     std::array<std::shared_ptr<Stream>, 4> made;
     made[0] = std::make_shared<Stream>(Stream::Kind::Process);
     made[0]->handle = info.hProcess;
     made[0]->pid = info.dwProcessId;
+    made[0]->tree = std::move(tree);
     Redirect* ends[3] = {&input, &output, &error};
     for (int k = 0; k < 3; k++) {
         if (ends[k]->parent.h == INVALID_HANDLE_VALUE) continue;
@@ -1068,8 +1169,10 @@ bool waitProcess(Stream& s, int64_t limit) {
     return true;
 }
 
+// It and every program it started that is still running.
 void killProcess(Stream& s) {
     if (s.simulated != nullptr) return endSimulated(*s.simulated, 1, true);
+    if (s.tree != nullptr) s.tree->end();
     TerminateProcess(s.handle, 1);
 }
 
@@ -1382,6 +1485,9 @@ struct Descriptors {
 // Starts the program: the process, then the ends of its streams this program keeps (null for
 // those that are not "pipe"). Every descriptor this program opens is closed in what it starts
 // (O_CLOEXEC), but for the three it is given.
+// A process started with limits: watched from then on (below).
+void watch(const std::shared_ptr<Stream>& s);
+
 std::array<std::shared_ptr<Stream>, 4> startProcess(VM& vm, const Spawn& spawn) {
     Descriptors fds;
     int child[3] = {-1, -1, -1}, parent[3] = {-1, -1, -1};
@@ -1453,6 +1559,12 @@ std::array<std::shared_ptr<Stream>, 4> startProcess(VM& vm, const Spawn& spawn) 
     std::array<std::shared_ptr<Stream>, 4> made;
     made[0] = std::make_shared<Stream>(Stream::Kind::Process);
     made[0]->pid = pid;
+    if (spawn.memory > 0 || spawn.processes > 0) {
+        made[0]->tree = std::make_shared<Tree>();
+        made[0]->tree->memory = spawn.memory;
+        made[0]->tree->processes = spawn.processes;
+        watch(made[0]);
+    }
     for (int k = 0; k < 3; k++) {
         if (parent[k] < 0) continue;
         made[k + 1] = std::make_shared<Stream>(Stream::Kind::Pipe);
@@ -1498,11 +1610,150 @@ bool waitProcess(Stream& s, int64_t limit) {
     }
 }
 
-// Only one not yet seen to end: once it has been waited for, its number may be another's.
+// Every process's children, by its parent's number in /proc/<n>/stat (the field after the
+// name, whose closing bracket is the last in the line).
+std::unordered_map<pid_t, std::vector<pid_t>> processChildren() {
+    std::unordered_map<pid_t, std::vector<pid_t>> children;
+    DIR* proc = ::opendir("/proc");
+    if (proc == nullptr) return children;
+    while (const dirent* entry = ::readdir(proc)) {
+        char* end = nullptr;
+        const long pid = std::strtol(entry->d_name, &end, 10);
+        if (pid <= 0 || *end != '\0') continue;
+        char path[64];
+        std::snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+        const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        char text[512];
+        const ssize_t got = ::read(fd, text, sizeof(text) - 1);
+        ::close(fd);
+        if (got <= 0) continue;
+        text[got] = '\0';
+        const char* close = std::strrchr(text, ')');
+        if (close == nullptr) continue;
+        char state = 0;
+        long parent = 0;
+        if (std::sscanf(close + 1, " %c %ld", &state, &parent) == 2) children[static_cast<pid_t>(parent)].push_back(static_cast<pid_t>(pid));
+    }
+    ::closedir(proc);
+    return children;
+}
+
+// The process and all below it.
+std::vector<pid_t> treeFrom(pid_t root, const std::unordered_map<pid_t, std::vector<pid_t>>& children) {
+    std::vector<pid_t> tree{root};
+    for (size_t i = 0; i < tree.size(); i++) {
+        auto found = children.find(tree[i]);
+        if (found != children.end()) tree.insert(tree.end(), found->second.begin(), found->second.end());
+    }
+    return tree;
+}
+
+// The memory the processes hold resident, in bytes.
+int64_t residentBytes(const std::vector<pid_t>& pids) {
+    static const int64_t page = ::sysconf(_SC_PAGESIZE);
+    int64_t total = 0;
+    for (pid_t pid : pids) {
+        char path[64];
+        std::snprintf(path, sizeof(path), "/proc/%d/statm", static_cast<int>(pid));
+        const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        char text[128];
+        const ssize_t got = ::read(fd, text, sizeof(text) - 1);
+        ::close(fd);
+        if (got <= 0) continue;
+        text[got] = '\0';
+        long size = 0, resident = 0;
+        if (std::sscanf(text, "%ld %ld", &size, &resident) == 2) total += resident * page;
+    }
+    return total;
+}
+
+// Ends the process and everything it started: each stopped as it is found, so none starts
+// another, until a look finds nothing new; then all killed. Held under waitMutex, so that the
+// process, not yet waited for, keeps its number throughout.
+void endTree(Stream& s) {
+    std::lock_guard<std::mutex> hold(s.waitMutex);
+    if (s.exited.load()) return;
+    std::vector<pid_t> stopped;
+    for (int look = 0; look < 100; look++) {
+        bool found = false;
+        for (pid_t pid : treeFrom(s.pid, processChildren())) {
+            if (std::find(stopped.begin(), stopped.end(), pid) != stopped.end()) continue;
+            ::kill(pid, SIGSTOP);
+            stopped.push_back(pid);
+            found = true;
+        }
+        if (!found) break;
+    }
+    for (pid_t pid : stopped) ::kill(pid, SIGKILL);
+}
+
+// The processes started with limits, looked at ten times a second, and ended with this program.
+std::mutex& limitedMutex() {
+    static std::mutex* made = new std::mutex;
+    return *made;
+}
+std::vector<std::weak_ptr<Stream>>& limited() {
+    static auto* made = new std::vector<std::weak_ptr<Stream>>;
+    return *made;
+}
+
+void watchLimited() {
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::vector<std::shared_ptr<Stream>> now;
+        {
+            std::lock_guard<std::mutex> hold(limitedMutex());
+            auto& all = limited();
+            all.erase(std::remove_if(all.begin(), all.end(),
+                                     [](const std::weak_ptr<Stream>& w) {
+                                         auto s = w.lock();
+                                         return s == nullptr || s->exited.load();
+                                     }),
+                      all.end());
+            for (auto& w : all)
+                if (auto s = w.lock()) now.push_back(s);
+        }
+        if (now.empty()) continue;
+        const auto children = processChildren();
+        for (const auto& s : now) {
+            const std::vector<pid_t> tree = treeFrom(s->pid, children);
+            const Tree& t = *s->tree;
+            int past = 0;
+            if (t.processes > 0 && static_cast<int64_t>(tree.size()) > t.processes) past = 2;
+            else if (t.memory > 0 && residentBytes(tree) > t.memory) past = 1;
+            if (past == 0) continue;
+            s->tree->past = past;
+            endTree(*s);
+        }
+    }
+}
+
+// A process started with limits: watched from now on.
+void watch(const std::shared_ptr<Stream>& s) {
+    static std::once_flag started;
+    std::call_once(started, [] {
+        std::thread(watchLimited).detach();
+        std::atexit([] {
+            std::vector<std::shared_ptr<Stream>> left;
+            {
+                std::lock_guard<std::mutex> hold(limitedMutex());
+                for (auto& w : limited())
+                    if (auto s = w.lock()) left.push_back(s);
+            }
+            for (const auto& s : left) endTree(*s);
+        });
+    });
+    std::lock_guard<std::mutex> hold(limitedMutex());
+    limited().push_back(s);
+}
+
+// It and every program it started that is still running. Only one not yet seen to end: once it
+// has been waited for, its number may be another's.
 void killProcess(Stream& s) {
     if (s.simulated != nullptr) return endSimulated(*s.simulated, 1, true);
-    std::lock_guard<std::mutex> hold(s.waitMutex);
-    if (!s.exited.load()) ::kill(s.pid, SIGKILL);
+    endTree(s);
 }
 
 int64_t currentProcessId() { return ::getpid(); }
@@ -2367,9 +2618,11 @@ void registerIo(VM& vm) {
 
     // ---- Processes ----
 
-    // spawn(command, directory, input, output, error, environment): starts a program. Gives
+    // spawn(command, directory, input, output, error, environment, limits): starts a program. Gives
     // [process, its input, its output, its error output], the last three null unless "pipe".
-    def("spawn", 6, 6, [](VM& vm, int, Value* args) -> Value {
+    // `limits`, if given, is [bytes of memory, processes at once] for it and all it starts
+    // together, each null for none (2026-11-20).
+    def("spawn", 6, 7, [](VM& vm, int argc, Value* args) -> Value {
         refuseInSandbox(vm, "starting a program");
         if (!args[0].isObjType(ObjType::List) || asList(args[0])->size() == 0)
             throw vm.runtimeError(Thrown::IllegalArgumentException, "a process is started from a list: the program, then its arguments");
@@ -2380,6 +2633,13 @@ void registerIo(VM& vm) {
         spawn.modes[1] = vm.toStr(args[3], "output stream");
         spawn.modes[2] = vm.toStr(args[4], "error stream");
         spawn.environment = args[5];
+        if (argc > 6 && !args[6].isNull()) {
+            if (!args[6].isObjType(ObjType::List) || asList(args[6])->size() != 2)
+                throw vm.runtimeError(Thrown::IllegalArgumentException, "a process's limits are [memory, processes]");
+            const Value memory = vm.listGet(asList(args[6]), 0), processes = vm.listGet(asList(args[6]), 1);
+            spawn.memory = memory.isNull() ? 0 : std::max<int64_t>(vm.toInt(memory, "memory"), 1);
+            spawn.processes = processes.isNull() ? 0 : std::max<int64_t>(vm.toInt(processes, "processes"), 1);
+        }
         const std::array<std::shared_ptr<Stream>, 4> made = startProcess(vm, spawn);
 
         ObjList* result = newList(vm);
@@ -2488,10 +2748,20 @@ void registerIo(VM& vm) {
         return Value::boolean(!waitProcess(*s, 0));
     });
 
+    // Ends the program and every program it started that is still running.
     def("processKill", 1, 1, [](VM& vm, int, Value* args) -> Value {
         auto s = streamOf(vm, args[0]);
         if (!s->exited.load() && !s->closed.load()) killProcess(*s);
         return Value::null();
+    });
+
+    // The limit a program started with limits went past, and was ended for: "memory",
+    // "processes", or null.
+    def("processPast", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        auto s = findStream(args[0]);
+        if (s == nullptr || s->tree == nullptr) return Value::null();
+        const int past = s->tree->past.load();
+        return past == 1 ? vm.str("memory") : past == 2 ? vm.str("processes") : Value::null();
     });
 
     def("processId", 1, 1, [](VM& vm, int, Value* args) -> Value {
@@ -2711,14 +2981,6 @@ void registerIo(VM& vm) {
         auto out = std::make_shared<Outcome>();
         return vm.blocking([=] { out->data = nameOf(address); },
                            [out](VM& vm) -> Value { return out->data.empty() ? Value::null() : vm.str(out->data); });
-    });
-
-    // This machine's name; "localhost" where the system will not say, which a working one does.
-    def("hostName", 0, 0, [](VM& vm, int, Value*) -> Value {
-        startNetworking(vm);
-        char name[256] = {};
-        if (gethostname(name, static_cast<int>(sizeof(name) - 1)) != 0 || name[0] == 0) return vm.str("localhost");
-        return vm.str(name);
     });
 
     // openDatagram(port, address): a UDP socket. Port 0 lets the system choose one; with no

@@ -1,0 +1,31 @@
+// A unit kept compiled and put back into another program (D145) names the class a method put in
+// place of its call was made for (JumpIfNotClass) by that class's global, which is renumbered for
+// the program it goes into as every global is. Found 2026-11-20 with import Crypto: a program of
+// 60 globals kept the library's unit, and the next program to put it back (calling Hkdf.expand,
+// whose b.digest() is put in place) had code naming a global it did not have: an internal error,
+// or a crash. The two programs run here as ww's of their own, on a cache of their own.
+// Run by ww itself; a built program, started alone, has no ww to ask, and says what ww says.
+//
+// The programs it starts carry WW_UNITS_INLINED_CHILD, and this test, finding it, starts nothing:
+// a first version took a built program for ww and started itself, again and again, until the
+// machine ran out of memory (2026-11-20).
+
+val command = Process.currentCommand()
+if (Program.environment["WW_UNITS_INLINED_CHILD"] != null) {
+  print("started by itself: nothing done")
+} else if (command.size < 2 or FilePath(command[0]).nameWithoutExtension != "ww") {
+  print("32")
+  print("0 3d7afb663124ecbf")
+} else {
+  val ww = command[0]
+  val dir = FilePath.createTempDirectory("units-inlined")
+  val first = FilePath(dir, "first.ww")
+  val second = FilePath(dir, "second.ww")
+  first.writeText("import Crypto.*\n" + (1..60).map { "val v$it = $it" }.join("\n") + "\nprint(Sha256.hash(Bytes(1)).size)\n")
+  second.writeText("import Crypto.*\nprint(Hkdf.expand(Sha256(), Bytes(32), size = 8).toHex())\n")
+  val setting = {"WW_CACHE": FilePath(dir, "cache").text, "WW_UNITS_INLINED_CHILD": "1"}
+  print(Process.run(ww, first.text, environment = setting).output.trim())   // expect: 32
+  val run = Process.run(ww, second.text, environment = setting)
+  print(run.exitCode, run.output.trim())   // expect: 0 3d7afb663124ecbf
+  dir.deleteRecursively()
+}

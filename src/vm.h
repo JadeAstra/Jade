@@ -1925,6 +1925,7 @@ void registerRegex(VM& vm);    // regex_api.cpp: what Regex is built on (N5, M8)
 void registerForeign(VM& vm);  // foreign.cpp: Library, Memory and Foreign (M8)
 void registerWorkers(VM& vm);  // worker.cpp: isolated workers
 void registerSecureRandom(VM& vm);  // crypto/random.cpp: the system's secure random numbers
+void registerCrypto(VM& vm);  // crypto/api.cpp: what import Crypto is built on (networking plan, part 2)
 // For scripts (script.cpp): a value written out as a worker's message is, to be read by another
 // VM; and such a message read back. Frozen data in it is shared, as in a worker's (D97).
 struct Message;

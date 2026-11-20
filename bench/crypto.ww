@@ -1,0 +1,40 @@
+// import Crypto's speed (networking plan, part 2): megabytes a second through each hash and
+// cipher at 16 KB a call (a TLS record), HMAC and PBKDF2 calls a second, and Argon2id's time at
+// the RFC's second recommendation. Compare with `openssl speed -evp <algorithm> -bytes 16384`.
+//
+//   ww bench/crypto.ww [portable]
+import Crypto.*
+
+if (Program.arguments.contains("portable")) { CryptoEngine.portable = true }
+print("instructions:", CryptoEngine.instructions)
+val block = SecureRandom.bytes(16384)
+
+fun rate(name : string, bytesEach : int, run : () -> unit) {
+  var count = 0
+  val started = clock()
+  while (clock() - started < 1.0) {
+    run()
+    count++
+  }
+  val seconds = clock() - started
+  print(name.padEnd(28), bytesEach > 0 ? "%8.1f MB/s".format(count * bytesEach / seconds / 1e6) : "%8.0f a second".format(count / seconds))
+}
+
+rate("SHA-256", 16384) { Sha256.hash(block) }
+rate("SHA-512", 16384) { Sha512.hash(block) }
+rate("SHA3-256", 16384) { Sha3.hash(block) }
+rate("BLAKE2b", 16384) { Blake2b.hash(block) }
+val key = SecureRandom.bytes(32)
+val gcm = AesGcm(key)
+val chacha = ChaCha20Poly1305(key)
+val out = Bytes(16384 + 16)
+val nonce = Bytes(12)
+rate("AES-256-GCM seal", 16384) { gcm.sealInto(out, 0, block, 0, 16384, nonce) }
+rate("ChaCha20-Poly1305 seal", 16384) { chacha.sealInto(out, 0, block, 0, 16384, nonce) }
+rate("HMAC-SHA256 of 64 bytes", 0) { Hmac.mac(Sha256(), key, block[0..<64]) }
+val started = clock()
+Pbkdf2.derive(Sha256(), "password", key, 600000)
+print("PBKDF2-SHA256 600,000".padEnd(28), "%8.0f ms".format((clock() - started) * 1000))
+val argon = clock()
+Argon2id.hash("password", key[0..<16])
+print("Argon2id t=3 m=64MiB p=4".padEnd(28), "%8.0f ms".format((clock() - argon) * 1000))

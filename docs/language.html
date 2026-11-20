@@ -420,6 +420,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-bytesource-ww">bytesource.ww</a></li>
 <li><a href="#file-complex-ww">complex.ww</a></li>
 <li><a href="#file-core-ww">core.ww</a></li>
+<li><a href="#file-crypto-ww">crypto.ww</a></li>
 <li><a href="#file-db-ww">db.ww</a></li>
 <li><a href="#file-errors-ww">errors.ww</a></li>
 <li><a href="#file-file-ww">file.ww</a></li>
@@ -484,7 +485,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BlendMode"><code>BlendMode</code></a> (1)</li>
 <li><a href="#BlobRef"><code>BlobRef</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.inflate"><code>Bytes</code></a> (35)</li>
+<li><a href="#Bytes.toHex"><code>Bytes</code></a> (36)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (66)</li>
@@ -509,7 +510,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
 <li><a href="#DirEntry"><code>DirEntry</code></a> (2)</li>
 <li><a href="#Dither"><code>Dither</code></a> (1)</li>
-<li><a href="#Dns"><code>Dns</code></a> (5)</li>
+<li><a href="#Dns"><code>Dns</code></a> (4)</li>
 <li><a href="#Drawable"><code>Drawable</code></a> (3)</li>
 <li><a href="#Duration"><code>Duration</code></a> (25)</li>
 <li><a href="#Environment"><code>Environment</code></a> (8)</li>
@@ -616,7 +617,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
 <li><a href="#Plane"><code>Plane</code></a> (1)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
-<li><a href="#Process"><code>Process</code></a> (13)</li>
+<li><a href="#Process"><code>Process</code></a> (14)</li>
+<li><a href="#ProcessLimits"><code>ProcessLimits</code></a> (1)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
 <li><a href="#Program"><code>Program</code></a> (12)</li>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
@@ -699,7 +701,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#char.code"><code>char</code></a> (11)</li>
 <li><a href="#float.toBigInt"><code>float</code></a> (26)</li>
 <li><a href="#int.toBigInt"><code>int</code></a> (45)</li>
-<li><a href="#string.toBigInt"><code>string</code></a> (111)</li>
+<li><a href="#string.hexToBytes"><code>string</code></a> (112)</li>
 </ul>
 <section class="file" id="file-base64-ww">
 <h2>base64.ww</h2>
@@ -715,6 +717,13 @@ val back = Base64.decode(text).decodeToString()  // &quot;hello&quot;
 </div>
 <div class="entry member" id="Base64.decode"><code class="sig">fun decode(text : string) : Bytes</code><a class="anchor" href="#Base64.decode">#</a>
 <p>The bytes Base64 text stands for. Whitespace in it is passed over, so the lines MIME breaks it into every 76 characters are read as one; the padding = at the end may be left out. An IllegalArgumentException for a character Base64 has not, for = before the end, or for a length no bytes give (one character over a whole number of fours).</p>
+</div>
+<h3>Hex (networking plan, part 2)</h3>
+<div class="entry" id="Bytes.toHex"><code class="sig">fun Bytes.toHex() : string</code><a class="anchor" href="#Bytes.toHex">#</a>
+<p>The bytes as hex text, two lowercase digits each: Bytes([1, 171]).toHex() is &quot;01ab&quot;, as a digest or key is written.</p>
+</div>
+<div class="entry" id="string.hexToBytes"><code class="sig">fun string.hexToBytes() : Bytes</code><a class="anchor" href="#string.hexToBytes">#</a>
+<p>The bytes hex text stands for, two digits each, either case: &quot;01AB&quot;.hexToBytes() is Bytes([1, 171]). An IllegalArgumentException for an odd count or a character that is no hex digit.</p>
 </div>
 </section>
 <section class="file" id="file-bigint-ww">
@@ -2483,6 +2492,11 @@ print(&quot;the map takes ${Program.memoryUsed - before} bytes&quot;)
 <div class="entry" id="buildString"><code class="sig">inline fun buildString(builder : StringBuilder.() -&gt; unit) : string</code><a class="anchor" href="#buildString">#</a>
 <p>Runs <code>builder</code> on a new StringBuilder, so that append(...) inside it builds the text, and gives the text.</p>
 </div>
+</section>
+<section class="file" id="file-crypto-ww">
+<h2>crypto.ww</h2>
+<h3>What import Crypto is built on (networking plan, part 2, 2026-11-20)</h3>
+<p>The primitives in C++ (src/crypto), declared here with their types, as the standard library's own are: lib/Crypto calls them. A program uses lib/Crypto's classes, not these.</p>
 </section>
 <section class="file" id="file-db-ww">
 <h2>db.ww</h2>
@@ -4263,9 +4277,12 @@ print(&quot;exit code&quot;, git.waitFor())
 if (result.exitCode == 0) { print(result.output) }
 </pre>
 <p>The command is the program and its arguments, as separate words or one list. <code>environment</code> holds variables added to this program's own (null takes one out). input is what the program reads, a Writer; output and error what it writes, Readers; each is there when it is a pipe.</p>
+<p>The program and every program it starts in turn are one tree (2026-11-20): kill() and a timeout end all of it at once, so nothing it started runs on. With <code>limits</code>, the tree is held to them together, and ended where it goes past one, and when this program ends:</p>
+<pre>Process.run(ww, &quot;test.ww&quot;, limits = ProcessLimits(memory = 8 * 1024 * 1024 * 1024, processes = 64))
+</pre>
 </div>
-<div class="entry member" id="Process.run"><code class="sig">fun run(vararg command : any, directory : (FilePath | string)? = null, environment : Map&lt;string, string?&gt;? = null, input : Stream | FilePath = Stream.discard, error : Stream | FilePath = Stream.pipe, charset : Charset = Charset.utf8, timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException</code><a class="anchor" href="#Process.run">#</a>
-<p>Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments, its output and errors read whatever they are said to be, and its input nothing unless said. With a <code>timeout</code>, a program that runs longer is killed, and run throws a TimeoutException (8.8h).</p>
+<div class="entry member" id="Process.run"><code class="sig">fun run(vararg command : any, directory : (FilePath | string)? = null, environment : Map&lt;string, string?&gt;? = null, input : Stream | FilePath = Stream.discard, error : Stream | FilePath = Stream.pipe, charset : Charset = Charset.utf8, timeout : Duration? = null, limits : ProcessLimits? = null) : ProcessResult throws IOException | TimeoutException</code><a class="anchor" href="#Process.run">#</a>
+<p>Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments, its output and errors read whatever they are said to be, and its input nothing unless said. With a <code>timeout</code>, a program that runs longer is killed with all it started, and run throws a TimeoutException (8.8h). With <code>limits</code>, as Process's; the result says which one the program went past, if any.</p>
 </div>
 <div class="entry member" id="Process.currentCommand"><code class="sig">fun currentCommand() : open List&lt;string&gt;</code><a class="anchor" href="#Process.currentCommand">#</a>
 <p>What started this program: the path of its executable and, when it is a script run by ww, the script. Process(Process.currentCommand() + [&quot;--second&quot;]) starts it again.</p>
@@ -4297,11 +4314,17 @@ if (result.exitCode == 0) { print(result.output) }
 <div class="entry member" id="Process.pid"><code class="sig">val pid : int</code><a class="anchor" href="#Process.pid">#</a>
 <p>The process id the system gave the program; it can still be read after the program ends.</p>
 </div>
-<div class="entry member" id="Process.kill"><code class="sig">fun kill()</code><a class="anchor" href="#Process.kill">#</a>
-<p>Ends the program now.</p>
+<div class="entry member" id="Process.limitReached"><code class="sig">val limitReached : string?</code><a class="anchor" href="#Process.limitReached">#</a>
+<p>The limit the program's tree went past, and was ended for: &quot;memory&quot; or &quot;processes&quot;; null where it went past none, or was started without limits.</p>
 </div>
-<div class="entry" id="ProcessResult"><code class="sig">data ProcessResult(val exitCode : int, val output : string, val error : string)</code><a class="anchor" href="#ProcessResult">#</a>
-<p>What a program run to its end with Process.run gave.</p>
+<div class="entry member" id="Process.kill"><code class="sig">fun kill()</code><a class="anchor" href="#Process.kill">#</a>
+<p>Ends the program now, and every program it started that is still running.</p>
+</div>
+<div class="entry" id="ProcessResult"><code class="sig">data ProcessResult(val exitCode : int, val output : string, val error : string, val limitReached : string? = null)</code><a class="anchor" href="#ProcessResult">#</a>
+<p>What a program run to its end with Process.run gave; <code>limitReached</code> as Process's.</p>
+</div>
+<div class="entry" id="ProcessLimits"><code class="sig">data ProcessLimits(val memory : int? = null, val processes : int? = null)</code><a class="anchor" href="#ProcessLimits">#</a>
+<p>Limits for a program and everything it starts in turn, together (2026-11-20): <code>memory</code> in bytes, and <code>processes</code> running at once; null for none. A tree that goes past one is ended, the whole of it; and a tree started with limits is ended when the program that started it ends. On Windows the system holds the tree to them as it runs (a job object); on Linux the tree is looked at ten times a second.</p>
 </div>
 <h3>Sockets</h3>
 <div class="entry" id="Socket"><code class="sig">class Socket : AutoCloseable</code><a class="anchor" href="#Socket">#</a>
@@ -5322,7 +5345,7 @@ print(home.isPrivate, here.isLoopback, IpAddress.parse(&quot;example.org&quot;))
 <div class="entry" id="Dns"><code class="sig">object Dns</code><a class="anchor" href="#Dns">#</a>
 <p>Looking names up, through the system's resolver (getaddrinfo: its hosts file, its DNS servers, its cache). Each call waits for the answer, as a socket's read does.</p>
 <pre>val addresses = Dns.lookup(&quot;example.org&quot;)     // IPv4 and IPv6, in the order the system prefers
-print(Dns.reverse(IpAddress.loopback), Dns.localHostName)
+print(Dns.reverse(IpAddress.loopback))          // this machine's name is Program.hostName
 </pre>
 <p>Records of DNS's own (MX, TXT and the rest) are not the resolver's to give: a program that needs them speaks DNS over a DatagramSocket. Not in a sandbox, whose network has no names to look up (an IOException).</p>
 </div>
@@ -5334,9 +5357,6 @@ print(Dns.reverse(IpAddress.loopback), Dns.localHostName)
 </div>
 <div class="entry member" id="Dns.reverse"><code class="sig">fun reverse(address : IpAddress) : string?</code><a class="anchor" href="#Dns.reverse">#</a>
 <p>The name the address has, as the resolver gives it; null where it has none.</p>
-</div>
-<div class="entry member" id="Dns.localHostName"><code class="sig">val localHostName : string</code><a class="anchor" href="#Dns.localHostName">#</a>
-<p>This machine's name.</p>
 </div>
 <div class="entry" id="DatagramSocket"><code class="sig">class DatagramSocket : AutoCloseable</code><a class="anchor" href="#DatagramSocket">#</a>
 <p>A UDP socket: datagrams sent and received whole, each on its own, with no connection (Java's DatagramSocket). A datagram may be lost, come twice or come out of order; what needs them all, in order, is built on top (a DNS client asks again).</p>

@@ -1,0 +1,139 @@
+// import Crypto's API (networking plan, part 2): hashes taken in pieces, copied and reset;
+// HMAC; HKDF; PBKDF2; Argon2id and its stored form; the ciphers in place; what each refuses;
+// Secrets, the hex helpers, and the published examples of the RFCs and the GCM paper.
+// tests/crypto_vectors.ww and tests/crypto_cases.ww check the results against Wycheproof and
+// against OpenSSL.
+import Crypto.*
+
+// ---- Hashes ----
+val abc = "abc".toBytes()
+print(Sha256.hash(abc).toHex())        // expect: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+print(Sha3.hash(abc, bits = 512).toHex().take(16), Sha3(224).size, Sha3(512).blockSize)   // expect: b751850b1a57168a 28 72
+print(Sha256().size, Sha256().blockSize, Sha384().size, Sha512().blockSize, Sha224().size)   // expect: 32 64 48 128 28
+// A piece at a time is the same as at once; a copy goes on apart; digest starts it again.
+val h = Sha256()
+h.update("ab".toBytes()).update("xcx".toBytes(), offset = 1, size = 1)
+val copy = h.copy()
+print(h.digest() == Sha256.hash(abc), h.digest().toHex() == Sha256.hash(Bytes(0)).toHex())   // expect: true true
+copy.update("d".toBytes())
+print(copy.digest().toHex() == Sha256.hash("abcd".toBytes()).toHex())   // expect: true
+h.update(abc)
+h.reset()
+print(h.digest().toHex() == Sha256.hash(Bytes(0)).toHex())               // expect: true
+val into = Bytes(40)
+Sha224().update(abc).digestInto(into, at = 10)
+print(into[9], into.toHex()[20..<28])                          // expect: 0 23097d22
+// SHAKE: its digest is its first bytes, and reading goes on from there.
+val shake = Shake(128).update(Bytes(0))
+print(shake.size, shake.read(4).toHex(), shake.read(4).toHex(), Shake(256, size = 10).update(abc).digest().size)   // expect: 32 7f9c2ba4 e88f827d 10
+print(Shake(128).update(Bytes(0)).digest().toHex().take(16))             // expect: 7f9c2ba4e88f827d
+for (bad in [{ Sha3(100) }, { Shake(512) }]) {
+  try { bad() } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: SHA-3 is 224, 256, 384 or 512 bits, not 100
+// expect: SHAKE is 128 or 256 bits, not 512
+try { Sha256().update(abc, offset = 2, size = 5) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: 5 bytes from 2 do not fit in bytes of size 3
+
+// ---- HMAC, HKDF, PBKDF2 ----
+// RFC 4231, test case 2.
+val jefe = Hmac.mac(Sha256(), "Jefe".toBytes(), "what do ya want for nothing?".toBytes())
+print(jefe.toHex())   // expect: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+val mac = Hmac(Sha512(), "key".toBytes())
+print(mac.size, mac.update(abc).verify(Hmac.mac(Sha512(), "key".toBytes(), abc)), mac.update(abc).verify(jefe))   // expect: 64 true false
+mac.update("x".toBytes())
+mac.reset()
+val forked = mac.update("ab".toBytes()).copy()
+print(forked.update("c".toBytes()).digest().toHex() == mac.update("c".toBytes()).digest().toHex(), forked.size)   // expect: true 64
+try { Hmac(Shake(), "k".toBytes()) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: HMAC is not made over a SHAKE
+// RFC 5869, test case 3: no salt, no info.
+print(Hkdf.derive(Sha256(), Bytes(22).fill(11.toByte()), size = 42).toHex())
+// expect: 8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8
+print(Hkdf.expand(Sha256(), Hkdf.extract(Sha256(), "secret".toBytes()), size = 0).size)   // expect: 0
+try { Hkdf.expand(Sha256(), Bytes(32), size = 8161) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: HKDF gives 0 to 8160 bytes with this hash, not 8161
+// RFC 7914's PBKDF2-HMAC-SHA256 example, and text taken as UTF-8.
+print(Pbkdf2.derive(Sha256(), "passwd", "salt".toBytes(), 1, 16).toHex())   // expect: 55ac046e56e3089fec1691c22544b605
+try { Pbkdf2.derive(Sha256(), "p", "s".toBytes(), 0) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: PBKDF2's iterations are 1 or more, not 0
+
+// ---- Argon2id ----
+// RFC 9106, 5.3.
+val rfc = Argon2id.hash(Bytes(32).fill(1.toByte()), Bytes(16).fill(2.toByte()), iterations = 3, memory = 32, parallelism = 4, size = 32,
+                        secret = Bytes(8).fill(3.toByte()), data = Bytes(12).fill(4.toByte()))
+print(rfc.toHex())   // expect: 0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659
+val stored = Argon2id.encode("correct horse", iterations = 1, memory = 64, parallelism = 2)
+print(stored.startsWith("\$argon2id\$v=19\$m=64,t=1,p=2\$"), stored.split('$').size, stored.indexOf('=', 30) < 0)   // expect: true 6 true
+print(Argon2id.verify(stored, "correct horse"), Argon2id.verify(stored, "correct horse!"), Argon2id.verify(stored, "correct horse".toBytes()))   // expect: true false true
+print(Argon2id.encode("x", iterations = 1, memory = 64, parallelism = 1) != Argon2id.encode("x", iterations = 1, memory = 64, parallelism = 1))   // expect: true
+for (bad in [{ Argon2id.verify("\$argon2i\$v=19\$m=8,t=1,p=1\$c2FsdHNhbHQ\$aGFzaA", "x") }, { Argon2id.hash("x", Bytes(16), memory = 7, parallelism = 1) },
+             { Argon2id.hash("x", Bytes(4), memory = 8, parallelism = 1) }, { Argon2id.hash("x", Bytes(16), memory = 64, parallelism = 1, size = 3) }]) {
+  try { bad() } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: not an Argon2id hash of version 19: $argon2i$v=19$m=8,t=1,p=1$c2FsdHNhbHQ$aGFzaA
+// expect: Argon2's memory in KiB is from 8 to 4294967295, not 7
+// expect: an Argon2 salt is 8 bytes or more
+// expect: Argon2's size is from 4 to 1048576, not 3
+print(Blake2b.hash(abc).toHex().take(16), Blake2b.hash(abc, size = 32, key = "k".toBytes()).size)   // expect: ba80a53f981c4d0d 32
+
+// ---- Ciphers ----
+// RFC 8439, 2.8.2.
+val sunscreen = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.".toBytes()
+val chacha = ChaCha20Poly1305(Bytes((0x80..0x9f).toList()))
+val nonce = "070000004041424344454647".hexToBytes()
+val aad = "50515253c0c1c2c3c4c5c6c7".hexToBytes()
+val sealed = chacha.seal(nonce, sunscreen, aad)
+print(sealed.size - sunscreen.size, sealed.toHex().take(16), sealed.toHex()[2 * sunscreen.size..])   // expect: 16 d31a8d34648e60db 1ae10b594f09e26a7e902ecbd0600691
+print(chacha.open(nonce, sealed, aad)!!.decodeToString() == sunscreen.decodeToString(), chacha.open(nonce, sealed), chacha.open(nonce, sealed[0..<15]))   // expect: true null null
+// The GCM paper's test case 2.
+print(AesGcm(Bytes(16)).seal(Bytes(12), Bytes(16)).toHex())   // expect: 0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf
+// In place behind a 5-byte header, as a TLS record is sealed, and opened in place again.
+val gcm = AesGcm(SecureRandom.bytes(32))
+val record = Bytes(5 + 11 + 16)
+record.copyFrom("hello world".toBytes(), 0, 1, 5, 1, 11)
+val header = record[0..<5]
+val sealedSize = gcm.sealInto(record, 5, record, 5, 11, Bytes(12), aad = header)
+print(sealedSize, record.toHex()[10..<32] != "hello world".toBytes().toHex())   // expect: 27 true
+print(gcm.openInto(record, 5, record, 5, sealedSize, Bytes(12), aad = header), record.decodeToString()[5..<16])   // expect: 11 hello world
+// Not authentic: -1, and nothing written.
+val target = Bytes(11).fill(7.toByte())
+val sealedAgain = gcm.seal(Bytes(12), "hello world".toBytes())
+sealedAgain[3] = (sealedAgain[3].toInt() ^ 1).toByte()
+print(gcm.openInto(target, 0, sealedAgain, 0, sealedAgain.size, Bytes(12)), target.toList().all { it.toInt() == 7 })   // expect: -1 true
+for (bad in [{ AesGcm(Bytes(20)) }, { ChaCha20Poly1305(Bytes(16)) }, { chacha.seal(Bytes(8), abc) }, { gcm.seal(Bytes(0), abc) },
+             { gcm.sealInto(record, 1, record, 0, 10, Bytes(12)) }, { gcm.sealInto(Bytes(10), 0, abc, 0, 3, Bytes(12)) }]) {
+  try { bad() } catch (e : RuntimeException) { print(e.message) }
+}
+// expect: an AES key is 16, 24 or 32 bytes, not 20
+// expect: a ChaCha20-Poly1305 key is 32 bytes, not 16
+// expect: a nonce of 8 bytes does not fit this cipher
+// expect: a nonce of 0 bytes does not fit this cipher
+// expect: sealed bytes go in the same place as the plain ones, or apart from them, not overlapping
+// expect: 19 bytes at 0 do not fit in bytes of size 10
+print(Aead.tagSize)                                                      // expect: 16
+// One cipher from several threads at once.
+val shared = ChaCha20Poly1305(SecureRandom.bytes(32))
+val jobs = (0..<8).map { n -> thread {
+  var fine = true
+  for (k in 0..<50) {
+    val iv = Bytes(12)
+    iv.putInt32(0, n * 1000 + k)
+    val text = "message $n $k".toBytes()
+    fine = fine and shared.open(iv, shared.seal(iv, text))!!.toHex() == text.toHex()
+  }
+  fine
+} }
+print(jobs.all { it.get() })                                             // expect: true
+
+// ---- Secrets, the engine, hex ----
+val secret = "hunter2".toBytes()
+print(Secrets.equal(secret, "hunter2".toBytes()), Secrets.equal(secret, "hunter3".toBytes()), Secrets.equal(secret, "hunter".toBytes()))   // expect: true false false
+Secrets.wipe(secret)
+print(secret.toList().all { it.toInt() == 0 }, secret.size)              // expect: true 7
+CryptoEngine.portable = true
+print(CryptoEngine.portable, CryptoEngine.instructions, Sha256.hash(abc).toHex().take(8))   // expect: true [] ba7816bf
+CryptoEngine.portable = false
+print(CryptoEngine.portable, CryptoEngine.instructions.size >= 0)        // expect: false true
+print(Bytes([0, 1, 171, 255]).toHex(), "00FFab".hexToBytes().toList())  // expect: 0001abff [0, 255, 171]
+for (bad in ["abc", "zz"]) {
+  try { bad.hexToBytes() } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: hex text has two digits for each byte, not 3 digits
+// expect: 'z' at 0 is not a hex digit

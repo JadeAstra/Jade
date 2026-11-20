@@ -157,7 +157,7 @@ data SocketAddress(val address : IpAddress, val port : int) {
 // servers, its cache). Each call waits for the answer, as a socket's read does.
 //
 //   val addresses = Dns.lookup("example.org")     // IPv4 and IPv6, in the order the system prefers
-//   print(Dns.reverse(IpAddress.loopback), Dns.localHostName)
+//   print(Dns.reverse(IpAddress.loopback))          // this machine's name is Program.hostName
 //
 // Records of DNS's own (MX, TXT and the rest) are not the resolver's to give: a program that
 // needs them speaks DNS over a DatagramSocket. Not in a sandbox, whose network has no names to
@@ -174,9 +174,6 @@ object Dns {
   fun lookupFirst(host : string) : IpAddress throws UnknownHostException => lookup(host)[0]
   // The name the address has, as the resolver gives it; null where it has none.
   fun reverse(address : IpAddress) : string? => __io.reverseLookup("$address")
-  // This machine's name.
-  val localHostName : string
-    get() => __io.hostName()
 }
 
 // A UDP socket: datagrams sent and received whole, each on its own, with no connection (Java's

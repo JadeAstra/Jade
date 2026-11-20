@@ -1478,6 +1478,7 @@ void registerBuiltins(VM& vm) {
     registerThreads(vm);
     registerIo(vm);
     registerSecureRandom(vm);
+    registerCrypto(vm);
     registerSandbox(vm);
     registerGrid(vm);
     registerRegex(vm);

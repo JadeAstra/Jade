@@ -171,6 +171,12 @@ enum Stream { pipe, inherit, discard, toOutput }
 // holds variables added to this program's own (null takes one out). input is what the
 // program reads, a Writer; output and error what it writes, Readers; each is there when it is
 // a pipe.
+//
+// The program and every program it starts in turn are one tree (2026-11-20): kill() and a
+// timeout end all of it at once, so nothing it started runs on. With `limits`, the tree is held
+// to them together, and ended where it goes past one, and when this program ends:
+//
+//   Process.run(ww, "test.ww", limits = ProcessLimits(memory = 8 * 1024 * 1024 * 1024, processes = 64))
 class Process {
   private val handle : any
   private val toProgram : Writer?
@@ -179,10 +185,10 @@ class Process {
 
   fun init(vararg command : any, directory : (FilePath | string)? = null, environment : Map<string, string?>? = null,
            input : Stream | FilePath = Stream.pipe, output : Stream | FilePath = Stream.pipe, error : Stream | FilePath = Stream.pipe,
-           charset : Charset = Charset.utf8) throws IOException {
+           charset : Charset = Charset.utf8, limits : ProcessLimits? = null) throws IOException {
     val words = __processWords(command)
     val handles : List<any?> = __spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
-                                       __redirect(output, "output", ">"), __redirect(error, "error", ">"), environment)
+                                       __redirect(output, "output", ">"), __redirect(error, "error", ">"), environment, limits)
     this.handle = handles[0] as any
     this.toProgram = handles[1] == null ? null : Writer(handles[1] as any, charset)
     this.fromProgram = handles[2] == null ? null : Reader(handles[2] as any, charset)
@@ -192,20 +198,28 @@ class Process {
   static {
     // Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments,
     // its output and errors read whatever they are said to be, and its input nothing unless
-    // said. With a `timeout`, a program that runs longer is killed, and run throws a
-    // TimeoutException (8.8h).
+    // said. With a `timeout`, a program that runs longer is killed with all it started, and
+    // run throws a TimeoutException (8.8h). With `limits`, as Process's; the result says which
+    // one the program went past, if any.
     fun run(vararg command : any, directory : (FilePath | string)? = null, environment : Map<string, string?>? = null,
             input : Stream | FilePath = Stream.discard, error : Stream | FilePath = Stream.pipe, charset : Charset = Charset.utf8,
-            timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException {
+            timeout : Duration? = null, limits : ProcessLimits? = null) : ProcessResult throws IOException | TimeoutException {
       val words = __processWords(command)
       val handles : List<any?> = __spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
-                                         "pipe", __redirect(error, "error", ">"), environment)
+                                         "pipe", __redirect(error, "error", ">"), environment, limits)
       if (handles[1] != null) { __io.close(handles[1] as any) }
-      val ended : List<any?> = __io.collect(handles[0], handles[2], handles[3], charset, timeout?.waitMilliseconds)
+      var ended : List<any?> = []
+      try {
+        ended = __io.collect(handles[0], handles[2], handles[3], charset, timeout?.waitMilliseconds)
+      } finally {
+        // Ended, or timed out and killed: what it started goes with it.
+        if (__io.processAlive(handles[0] as any)) { __io.processKill(handles[0] as any) }
+      }
+      val past = __io.processPast(handles[0] as any)
       for k in 0..3 {
         if (k != 1 and handles[k] != null) { __io.close(handles[k] as any) }
       }
-      return ProcessResult(ended[0] as int, ended[1] as string, ended[2] as string)
+      return ProcessResult(ended[0] as int, ended[1] as string, ended[2] as string, past)
     }
 
     // What started this program: the path of its executable and, when it is a script run by
@@ -243,23 +257,41 @@ class Process {
   // The process id the system gave the program; it can still be read after the program ends.
   val pid : int
     get() => __io.processId(handle)
+  // The limit the program's tree went past, and was ended for: "memory" or "processes"; null
+  // where it went past none, or was started without limits.
+  val limitReached : string?
+    get() => __io.processPast(handle)
 
-  // Ends the program now.
+  // Ends the program now, and every program it started that is still running.
   fun kill() {
     __io.processKill(handle)
   }
 }
 
-// What a program run to its end with Process.run gave.
-data ProcessResult(val exitCode : int, val output : string, val error : string)
+// What a program run to its end with Process.run gave; `limitReached` as Process's.
+data ProcessResult(val exitCode : int, val output : string, val error : string, val limitReached : string? = null)
+
+// Limits for a program and everything it starts in turn, together (2026-11-20): `memory` in
+// bytes, and `processes` running at once; null for none. A tree that goes past one is ended, the
+// whole of it; and a tree started with limits is ended when the program that started it ends.
+// On Windows the system holds the tree to them as it runs (a job object); on Linux the tree is
+// looked at ten times a second.
+data ProcessLimits(val memory : int? = null, val processes : int? = null) {
+  init {
+    if (memory != null and memory!! < 1) { throw IllegalArgumentException("a memory limit is 1 byte or more, not $memory") }
+    if (processes != null and processes!! < 1) { throw IllegalArgumentException("a process limit is 1 or more, not $processes") }
+  }
+}
 
 // Starts a program: the system's, or in a sandbox one the sandbox was given (M6.6.2): [the
 // process, what writes its input, what reads its output, what reads its errors], each null where
 // it is no pipe.
 fun __spawn(words : List<string>, directory : string?, input : string, output : string, error : string,
-            environment : Map<string, string?>?) : List<any?> throws IOException {
+            environment : Map<string, string?>?, limits : ProcessLimits? = null) : List<any?> throws IOException {
   val box = Sandbox.current
-  if (box == null) { return __io.spawn(words, directory, input, output, error, environment) }
+  if (box == null) {
+    return __io.spawn(words, directory, input, output, error, environment, limits == null ? null : [limits!!.memory, limits!!.processes])
+  }
   return box.startProgram(words, environment, input, output, error)
 }
 
@@ -505,7 +537,8 @@ external object __io {
   fun isOpen(handle : any?) : bool
   fun standard(which : int) : any
   fun spawn(command : List<string>, directory : string?, input : string, output : string, error : string,
-            environment : Map<string, string?>?) : List<any?> throws IOException
+            environment : Map<string, string?>?, limits : List<int?>? = null) : List<any?> throws IOException
+  fun processPast(handle : any) : string?
   fun collect(process : any?, output : any?, error : any?, charset : Charset, timeout : int? = null) : List<any?> throws IOException | TimeoutException
   fun processWait(handle : any, timeout : int? = null) : int?
   fun processAlive(handle : any) : bool
@@ -524,7 +557,6 @@ external object __io {
   fun shutdownOutput(handle : any) throws IOException
   fun lookup(host : string) : List<string> throws UnknownHostException
   fun reverseLookup(address : string) : string?
-  fun hostName() : string
   fun openDatagram(port : int, address : string? = null) : any throws IOException
   fun sendDatagram(handle : any, data : Bytes, offset : int, count : int, address : string, port : int) throws IOException
   fun receiveDatagram(handle : any, max : int) : List<any> throws IOException

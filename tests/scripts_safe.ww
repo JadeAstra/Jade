@@ -3,6 +3,11 @@
 // has is tried here from a safe script, and each is a SecurityException; what is no way out
 // (computing, text, maths, time, randomness) works; what it prints goes to the function given
 // for it; exit ends it alone. A trusted script reaches what a program does.
+//
+// The programs a script here would start, were it allowed, carry WW_SCRIPTS_SAFE_CHILD, and a run
+// that finds it starts nothing (2026-11-20, after a test that started itself ran the machine out
+// of memory).
+if (Program.environment["WW_SCRIPTS_SAFE_CHILD"] != null) { exit(0) }
 
 val dir = FilePath.createTempDirectory("ww_safe")
 dir.resolve("secret.txt").writeText("the program's own")
@@ -40,8 +45,8 @@ fun attempts() : List<string> => [
   tried { Socket("localhost", 80) },
   tried { ServerSocket(0) },
   tried { Socket(FilePath("a.sock")) },
-  tried { Process("cmd") },
-  tried { Process.run("cmd") },
+  tried { Process("cmd", environment = {"WW_SCRIPTS_SAFE_CHILD": "1"}) },
+  tried { Process.run("cmd", environment = {"WW_SCRIPTS_SAFE_CHILD": "1"}) },
   tried { Process.currentPid() },
   tried { Process.currentCommand() },
   // Native libraries

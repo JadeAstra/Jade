@@ -1,0 +1,145 @@
+// import Crypto against Project Wycheproof's test vectors (tests/data/wycheproof, Apache 2.0):
+// every case of AES-GCM, ChaCha20-Poly1305, HMAC over SHA-2 and SHA-3, HKDF and PBKDF2, the
+// valid ones made and the invalid ones refused, with the processor's instructions and with the
+// portable code (networking plan, part 2). A case that goes wrong is printed with its number.
+import Crypto.*
+
+val loaded : open Map<string, Map<string, any?>> = {:}
+fun load(name : string) : Map<string, any?> {
+  val known = loaded[name]
+  if (known != null) { return known!! }
+  val read = Json.read(FilePath("data/wycheproof/$name").readText()) as Map<string, any?>
+  loaded[name] = read
+  return read
+}
+
+fun hexOf(test : Map<string, any?>, key : string) : Bytes => (test[key] as string).hexToBytes()
+
+// What a run of a file found.
+class Tally(val name : string) {
+  var cases = 0
+  var wrong = 0
+  var skipped = 0
+  fun check(test : Map<string, any?>, right : bool) {
+    cases++
+    if (!right) {
+      wrong++
+      print("$name: case ${test["tcId"]} (${test["result"]}, ${test["comment"]}) went wrong")
+    }
+  }
+  fun report(engine : string) {
+    print("$name $engine: $cases cases, $wrong wrong" + (skipped > 0 ? ", $skipped skipped (tags shorter than 16 bytes)" : ""))
+  }
+}
+
+fun eachTest(doc : Map<string, any?>, each : (Map<string, any?>, Map<string, any?>) -> unit) {
+  for (g in doc["testGroups"] as List<any?>) {
+    val group = g as Map<string, any?>
+    for (t in group["tests"] as List<any?>) { each(group, t as Map<string, any?>) }
+  }
+}
+
+fun aeadFile(name : string, make : (Bytes) -> Aead) : Tally {
+  val tally = Tally(name)
+  eachTest(load(name)) { group, test ->
+    if (group["tagSize"] as int != 128) {
+      tally.skipped++
+      return@eachTest
+    }
+    val valid = test["result"] != "invalid"
+    val key = hexOf(test, "key")
+    val iv = hexOf(test, "iv")
+    val aad = hexOf(test, "aad")
+    val msg = hexOf(test, "msg")
+    val sealed = (test["ct"] as string + test["tag"] as string).hexToBytes()
+    try {
+      val cipher = make(key)
+      val opened = cipher.open(iv, sealed, aad)
+      if (valid) {
+        // Made the same, opened the same, and in place too.
+        val again = Bytes(msg.size + 16)
+        again.copyFrom(msg, 0, 1, 0, 1, msg.size)
+        val count = cipher.sealInto(again, 0, again, 0, msg.size, iv, aad)
+        val back = cipher.openInto(again, 0, again, 0, count, iv, aad)
+        tally.check(test, cipher.seal(iv, msg, aad).toHex() == sealed.toHex() and opened != null and opened!!.toHex() == msg.toHex()
+                    and back == msg.size and again.toHex().startsWith(msg.toHex()))
+      } else {
+        tally.check(test, opened == null)
+      }
+    } catch (e : IllegalArgumentException) {
+      // A key or nonce size the cipher does not take: right only for a case that is invalid.
+      tally.check(test, !valid)
+    }
+  }
+  return tally
+}
+
+fun macFile(name : string, hash : () -> Hash) : Tally {
+  val tally = Tally(name)
+  eachTest(load(name)) { group, test ->
+    val tag = hexOf(test, "tag")
+    val mac = Hmac.mac(hash(), hexOf(test, "key"), hexOf(test, "msg"))
+    // A tag shorter than the hash's is the start of the MAC.
+    val same = mac.toHex().startsWith(tag.toHex()) and tag.size == (group["tagSize"] as int) / 8
+    tally.check(test, test["result"] == "invalid" ? !same : same)
+  }
+  return tally
+}
+
+fun hkdfFile(name : string, hash : () -> Hash) : Tally {
+  val tally = Tally(name)
+  eachTest(load(name)) { group, test ->
+    val valid = test["result"] != "invalid"
+    try {
+      val okm = Hkdf.derive(hash(), hexOf(test, "ikm"), hexOf(test, "salt"), hexOf(test, "info"), test["size"] as int)
+      tally.check(test, valid == (okm.toHex() == test["okm"]))
+    } catch (e : IllegalArgumentException) {
+      tally.check(test, !valid)
+    }
+  }
+  return tally
+}
+
+fun pbkdf2File(name : string, hash : () -> Hash) : Tally {
+  val tally = Tally(name)
+  eachTest(load(name)) { group, test ->
+    val valid = test["result"] != "invalid"
+    try {
+      val dk = Pbkdf2.derive(hash(), hexOf(test, "password"), hexOf(test, "salt"), test["iterationCount"] as int, test["dkLen"] as int)
+      tally.check(test, valid == (dk.toHex() == test["dk"]))
+    } catch (e : IllegalArgumentException) {
+      tally.check(test, !valid)
+    }
+  }
+  return tally
+}
+
+// Quick (WW_TEST_QUICK=1, under GC stress, where reading a file of 100 KB takes seconds): the four
+// smallest files, both ways. Each file is read once.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+for (portable in [false, true]) {
+  CryptoEngine.portable = portable
+  val engine = portable ? "(portable)" : "(instructions)"
+  val tallies : open List<Tally> = []
+  if (!quick) {
+    tallies.add(aeadFile("aes_gcm_test.json") { AesGcm(it) })
+    tallies.add(aeadFile("chacha20_poly1305_test.json") { ChaCha20Poly1305(it) })
+    tallies.add(macFile("hmac_sha384_test.json") { Sha384() })
+    tallies.add(macFile("hmac_sha512_test.json") { Sha512() })
+    tallies.add(macFile("hmac_sha3_256_test.json") { Sha3(256) })
+    tallies.add(macFile("hmac_sha3_512_test.json") { Sha3(512) })
+    tallies.add(hkdfFile("hkdf_sha384_test.json") { Sha384() })
+    tallies.add(hkdfFile("hkdf_sha512_test.json") { Sha512() })
+  }
+  tallies.add(macFile("hmac_sha256_test.json") { Sha256() })
+  tallies.add(hkdfFile("hkdf_sha256_test.json") { Sha256() })
+  tallies.add(pbkdf2File("pbkdf2_hmacsha256_test.json") { Sha256() })
+  tallies.add(pbkdf2File("pbkdf2_hmacsha512_test.json") { Sha512() })
+  for (t in tallies) {
+    if (t.cases == 0) { print("${t.name}: no cases checked") }
+  }
+  print("wycheproof $engine:", tallies.all { it.wrong == 0 } ? "every case right" : "some cases wrong")
+}
+CryptoEngine.portable = false
+// expect: wycheproof (instructions): every case right
+// expect: wycheproof (portable): every case right

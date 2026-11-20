@@ -139,7 +139,7 @@ server.address  server.port  "$server"
 Dns.lookup("example.org")                      // List&lt;IpAddress&gt;, the system's resolver (getaddrinfo)
 Dns.lookupFirst("example.org")                 // the one the system prefers
 Dns.reverse(address)                           // a name, or null
-Dns.localHostName                              // this machine's name
+Program.hostName                               // this machine's name, as before
 // An UnknownHostException, an IOException, where the name is not found.
 
 DatagramSocket(port = 5353).use { udp -&gt;           // no address: IPv4 and IPv6 both

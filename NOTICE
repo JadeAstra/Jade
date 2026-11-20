@@ -1,0 +1,9 @@
+WinterWolf
+Copyright 2026 Jade
+
+Licensed under the Apache License, Version 2.0, with the Runtime Library
+Exception (see LICENSE).
+
+The test data in tests/data/wycheproof comes from Project Wycheproof
+(https://github.com/C2SP/wycheproof), also licensed under the Apache
+License, Version 2.0; see tests/data/wycheproof/README.md.

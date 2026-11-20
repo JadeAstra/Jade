@@ -89,3 +89,39 @@ object Base64 {
     return text.size - 1
   }
 }
+
+// ---- Hex (networking plan, part 2) ----
+
+// The bytes as hex text, two lowercase digits each: Bytes([1, 171]).toHex() is "01ab", as a
+// digest or key is written.
+fun Bytes.toHex() : string {
+  val digits = "0123456789abcdef"
+  val text = StringBuilder()
+  for (b in this.toList()) {
+    val v = b.toInt()
+    text.append(digits[v >> 4])
+    text.append(digits[v & 15])
+  }
+  return text.toString()
+}
+
+// The bytes hex text stands for, two digits each, either case: "01AB".hexToBytes() is
+// Bytes([1, 171]). An IllegalArgumentException for an odd count or a character that is no hex
+// digit.
+fun string.hexToBytes() : Bytes {
+  if (this.size % 2 != 0) { throw IllegalArgumentException("hex text has two digits for each byte, not ${this.size} digits") }
+  val out = Bytes(this.size / 2)
+  for (i in 0..<out.size) {
+    out[i] = (__hexDigit(this, 2 * i) * 16 + __hexDigit(this, 2 * i + 1)).toByte()
+  }
+  return out
+}
+
+// The value of the hex digit at `index` of `text`.
+fun __hexDigit(text : string, index : int) : int {
+  val code = text[index].code
+  if (code >= 48 and code <= 57) { return code - 48 }
+  if (code >= 97 and code <= 102) { return code - 87 }
+  if (code >= 65 and code <= 70) { return code - 55 }
+  throw IllegalArgumentException("'${text[index]}' at $index is not a hex digit")
+}

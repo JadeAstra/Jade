@@ -1,0 +1,140 @@
+// import Crypto against what Python's hashlib and cryptography package (OpenSSL) give for the
+// same inputs (tests/data/crypto_cases.json, made by tools/crypto/cases.py): every hash at
+// every length near its blocks' edges and taken in pieces, SHAKE's longer outputs, HMAC with
+// keys short and long, HKDF, PBKDF2, BLAKE2b, Argon2id in several shapes, AES-GCM with nonces of
+// many sizes, ChaCha20-Poly1305, and long messages; with the processor's instructions and with
+// the portable code (networking plan, part 2). A case that goes wrong is printed.
+import Crypto.*
+
+// Quick (WW_TEST_QUICK=1, under GC stress, where reading the whole file alone takes minutes):
+// every tenth case of each kind, from crypto_cases_quick.json, which tools/crypto/cases.py makes too.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+val cases = Json.read(FilePath(quick ? "data/crypto_cases_quick.json" : "data/crypto_cases.json").readText()) as Map<string, any?>
+val pool = (cases["pool"] as string).hexToBytes()
+
+fun hashNamed(name : string) : Hash {
+  return when (name) {
+    "sha224" -> Sha224()
+    "sha256" -> Sha256()
+    "sha384" -> Sha384()
+    "sha512" -> Sha512()
+    "sha3_224" -> Sha3(224)
+    "sha3_256" -> Sha3(256)
+    "sha3_384" -> Sha3(384)
+    "sha3_512" -> Sha3(512)
+    else -> throw IllegalArgumentException(name)
+  }
+}
+
+fun listOf(name : string) : List<Map<string, any?>> => (cases[name] as List<any?>).map { it as Map<string, any?> }
+fun hexOf(c : Map<string, any?>, key : string) : Bytes => (c[key] as string).hexToBytes()
+
+var wrong = 0
+fun check(kind : string, index : int, right : bool) {
+  if (!right) {
+    wrong++
+    print("$kind case $index went wrong")
+  }
+}
+
+fun hashes() : int {
+  var count = 0
+  for ((i, c) in listOf("hash").withIndex()) {
+    val name = c["hash"] as string
+    val size = c["size"] as int
+    val expected = c["digest"] as string
+    if (name.startsWith("shake")) {
+      val shake = Shake(name == "shake_128" ? 128 : 256)
+      shake.update(pool, 0, size)
+      // Its output read in two pieces, to cross the rate in reading too.
+      val out = c["out"] as int
+      val first = shake.read(out / 3)
+      val rest = shake.read(out - out / 3)
+      check("hash", i, first.toHex() + rest.toHex() == expected)
+    } else if (c["times"] != null) {
+      // A megabyte, 256 bytes at a time.
+      val h = hashNamed(name)
+      for (k in 0..<(c["times"] as int)) { h.update(pool, 0, size) }
+      check("hash", i, h.digest().toHex() == expected)
+    } else {
+      // In the pieces the case gives, then at once, then a copy taken halfway.
+      val h = hashNamed(name)
+      var at = 0
+      for (cut in c["cuts"] as List<any?>) {
+        h.update(pool, at, cut as int - at)
+        at = cut as int
+      }
+      val half = h.copy()
+      h.update(pool, at, size - at)
+      half.update(pool, at, size - at)
+      check("hash", i, h.digest().toHex() == expected and half.digest().toHex() == expected and hashNamed(name).update(pool, 0, size).digest().toHex() == expected)
+    }
+    count++
+  }
+  return count
+}
+
+fun macs() : int {
+  var count = 0
+  for ((i, c) in listOf("hmac").withIndex()) {
+    val mac = Hmac(hashNamed(c["hash"] as string), hexOf(c, "key"))
+    val msg = hexOf(c, "msg")
+    mac.update(msg, 0, msg.size / 2).update(msg, msg.size / 2)
+    check("hmac", i, mac.verify(hexOf(c, "mac")))
+    count++
+  }
+  for ((i, c) in listOf("hkdf").withIndex()) {
+    val okm = Hkdf.derive(hashNamed(c["hash"] as string), hexOf(c, "ikm"), hexOf(c, "salt"), hexOf(c, "info"), c["size"] as int)
+    check("hkdf", i, okm.toHex() == c["okm"])
+    count++
+  }
+  for ((i, c) in listOf("pbkdf2").withIndex()) {
+    val dk = Pbkdf2.derive(hashNamed(c["hash"] as string), hexOf(c, "password"), hexOf(c, "salt"), c["iterations"] as int, c["size"] as int)
+    check("pbkdf2", i, dk.toHex() == c["dk"])
+    count++
+  }
+  for ((i, c) in listOf("blake2b").withIndex()) {
+    val key = hexOf(c, "key")
+    check("blake2b", i, Blake2b.hash(hexOf(c, "msg"), c["size"] as int, key.size == 0 ? null : key).toHex() == c["digest"])
+    count++
+  }
+  for ((i, c) in listOf("argon2id").withIndex()) {
+    val secret = hexOf(c, "secret")
+    val ad = hexOf(c, "ad")
+    val tag = Argon2id.hash(hexOf(c, "password"), hexOf(c, "salt"), c["iterations"] as int, c["memory"] as int, c["lanes"] as int, c["size"] as int,
+                            secret.size == 0 ? null : secret, ad.size == 0 ? null : ad)
+    check("argon2id", i, tag.toHex() == c["tag"])
+    count++
+  }
+  return count
+}
+
+fun ciphers() : int {
+  var count = 0
+  for ((i, c) in listOf("aead").withIndex()) {
+    val key = hexOf(c, "key")
+    val cipher : Aead = c["cipher"] == "aes-gcm" ? AesGcm(key) : ChaCha20Poly1305(key)
+    val nonce = hexOf(c, "nonce")
+    val aad = hexOf(c, "aad")
+    val msg = hexOf(c, "msg")
+    val sealed = cipher.seal(nonce, msg, aad)
+    val opened = cipher.open(nonce, sealed, aad)
+    // Any one bit changed, in the text, the tag or the aad, and it does not open.
+    val changed = Bytes(sealed)
+    val bit = (i * 7919) % (changed.size * 8)
+    changed[bit / 8] = (changed[bit / 8].toInt() ^ (1 << (bit % 8))).toByte()
+    check("aead", i, sealed.toHex() == c["sealed"] and opened != null and opened!!.toHex() == msg.toHex() and cipher.open(nonce, changed, aad) == null)
+    count++
+  }
+  return count
+}
+
+for (portable in [false, true]) {
+  CryptoEngine.portable = portable
+  val engine = portable ? "portable" : "instructions"
+  val counts = [hashes(), macs(), ciphers()]
+  print(engine, counts.all { it > 0 } ? "hashes, macs and keys, ciphers checked" : "some kind not checked", "wrong:", wrong)
+}
+CryptoEngine.portable = false
+// expect: instructions hashes, macs and keys, ciphers checked wrong: 0
+// expect: portable hashes, macs and keys, ciphers checked wrong: 0

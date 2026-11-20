@@ -1,0 +1,83 @@
+// A program's tree (2026-11-20): kill() and Process.run's timeout end what the program started
+// too, and limits end a tree that goes past them. Made after a test that started itself again and
+// again ran the machine out of memory, its chain outliving the runner's timeout.
+//
+// Safe whatever goes wrong: every program it starts ends by itself within seconds, and runs only
+// the part its arguments name, with WW_PROCESS_TREE_CHILD set; a copy started so never starts the
+// test itself. Run by ww itself; a built program, started alone, has no ww to ask, and says what
+// ww says.
+
+val command = Process.currentCommand()
+val child = Program.environment["WW_PROCESS_TREE_CHILD"] != null
+val role = Program.arguments.isEmpty() ? "" : Program.arguments[0]
+
+if (child) {
+  when (role) {
+    // Waits, then leaves a file: there only where it was not ended first.
+    "sleeper" -> {
+      Thread.sleep(1500.milliseconds)
+      FilePath(Program.arguments[1]).writeText("ran on")
+    }
+    // Starts a sleeper, says so, then waits a while itself.
+    "parent" -> {
+      Process(command + ["sleeper", Program.arguments[1]], environment = {"WW_PROCESS_TREE_CHILD": "1"}, output = Stream.discard)
+      print("started")
+      flush()
+      Thread.sleep(8.seconds)
+    }
+    // Starts ten programs that wait 3 seconds each, then waits for them.
+    "spawner" -> {
+      val started : open List<Process> = []
+      try {
+        for (i in 0..<10) { started.add(Process(command + ["nap"], environment = {"WW_PROCESS_TREE_CHILD": "1"}, output = Stream.discard)) }
+      } catch (e : IOException) { }
+      for (p in started) { p.waitFor() }
+    }
+    "nap" -> Thread.sleep(3.seconds)
+    // Takes 64 MB at a time, up to 2 GB at most, holding all of it.
+    "hog" -> {
+      val held : open List<Bytes> = []
+      for (i in 0..<32) {
+        held.add(Bytes(64 * 1024 * 1024).fill(1.toByte()))
+        Thread.sleep(50.milliseconds)
+      }
+    }
+  }
+} else if (command.size < 2 or FilePath(command[0]).nameWithoutExtension != "ww") {
+  print("false")
+  print("TimeoutException false")
+  print("processes")
+  print("memory")
+  print("a memory limit is 1 byte or more, not 0")
+} else {
+  val marked = {"WW_PROCESS_TREE_CHILD": "1"}
+  val dir = FilePath.createTempDirectory("process-tree")
+  try {
+    // kill(): the sleeper the program started is ended with it, before it can leave its file.
+    val killedFile = FilePath(dir, "killed.txt")
+    val parent = Process(command + ["parent", killedFile.text], environment = marked)
+    parent.output.readLine()
+    parent.kill()
+    parent.waitFor()
+    Thread.sleep(2500.milliseconds)
+    print(killedFile.exists())                                                   // expect: false
+
+    // A timeout ends the tree too.
+    val timedFile = FilePath(dir, "timed.txt")
+    var ended = "nothing"
+    try {
+      Process.run(command + ["parent", timedFile.text], environment = marked, timeout = 500.milliseconds)
+    } catch (e : TimeoutException) {
+      ended = "TimeoutException"
+    }
+    Thread.sleep(2500.milliseconds)
+    print(ended, timedFile.exists())                                             // expect: TimeoutException false
+
+    // Past a limit of processes, or of memory, the tree is ended, and says which.
+    print(Process.run(command + ["spawner"], environment = marked, limits = ProcessLimits(processes = 4), timeout = 60.seconds).limitReached)   // expect: processes
+    print(Process.run(command + ["hog"], environment = marked, limits = ProcessLimits(memory = 512 * 1024 * 1024), timeout = 60.seconds).limitReached)   // expect: memory
+    try { ProcessLimits(memory = 0) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a memory limit is 1 byte or more, not 0
+  } finally {
+    dir.deleteRecursively()
+  }
+}

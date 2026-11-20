@@ -107,6 +107,23 @@ if (!ww.exists()) { bad = "no ww at $ww" }
 if (tests == null or !tests!!.isDirectory()) { bad = "no tests at ${tests ?: "?"}: give --tests" }
 if (bad != "") { exit(usage(bad)) }
 
+// One test run at a time on this machine (2026-11-20, after two full suites at once ran it out of
+// memory): a run holds a port on 127.0.0.1 for as long as it lives, which the system lets go of
+// however the run ends, and leaves a line in the temporary folder saying whose run it is.
+const runnerPort = 47533
+val whoseRun = FilePath(Program.environment["TEMP"] ?: Program.environment["TMPDIR"] ?: "/tmp", "ww-test-run.txt")
+var heldPort : ServerSocket? = null
+try {
+  heldPort = ServerSocket(runnerPort, bindAddress = IpAddress.loopback)
+} catch (e : IOException) {
+  var who = "another test run"
+  try { who = whoseRun.readText().trim() } catch (e2 : IOException) { }
+  exit(usage("$who is going on this machine, and one test run goes at a time: wait for it to end"))
+}
+try {
+  whoseRun.writeText("a test run of process ${Program.processId} (ww tests/runner/run.ww ${arguments.join(" ")})\n")
+} catch (e : IOException) { }
+
 fun options(s : Setting, w : List<Way>?) : Options {
   val o = Options(ww.absolute, tests!!.absolute)
   if (w != null) { o.ways = w.filter { it in o.ways } }

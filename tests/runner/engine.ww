@@ -267,7 +267,7 @@ class Suite(val options : Options) {
     stopping = true
     for (item in items) {
       val p = item.process
-      if (p != null) { endTree(p) }
+      if (p != null) { p.kill() }   // it and everything it started
     }
   }
 
@@ -339,21 +339,30 @@ class Suite(val options : Options) {
     if (input != null) { inFile.writeText(input) }
     val command : open List<string> = [(program ?: options.ww).text]
     command.addAll(arguments)
+    // Each check and everything it starts held to limits together (2026-11-20, after a test that
+    // started itself again and again ran the machine out of memory): past one, it is ended whole.
     val p = Process(command, directory = dir, environment = environment, input = input != null ? inFile : Stream.discard,
-                    output = out, error = err)
+                    output = out, error = err, limits = checkLimits)
     if (item != null) { item.process = p }
     val limit = options.limit()
     var code = p.waitFor(limit.seconds)
     var timedOut = false
     if (code == null) {
       timedOut = true
-      endTree(p)
+      p.kill()   // it, and everything it started, at once
       code = p.waitFor()
     }
     if (item != null) { item.process = null }
     val text = out.exists() ? out.readText() : ""
     var error = err.exists() ? err.readText() : ""
-    if (timedOut) { error = "stopped after $limit s: past the time limit\n" + error }
+    val past = p.limitReached
+    if (past != null) {
+      timedOut = true
+      error = "stopped: it and what it started went past their limit of " +
+              (past == "processes" ? "${checkLimits.processes} processes at once" : "${checkLimits.memory!! / (1024 * 1024 * 1024)} GB of memory") + "\n" + error
+    } else if (timedOut) {
+      error = "stopped after $limit s: past the time limit\n" + error
+    }
     // Gone with the folder at the end where it cannot go now: a scanner looking at a file just
     // written may hold it a moment, and that is no fault of the test's.
     for (f in [out, err, inFile]) {
@@ -364,15 +373,8 @@ class Suite(val options : Options) {
 
   static {
     var runs = 0
-  }
-
-  // A process and those it started ended: on Windows by taskkill, elsewhere the process alone.
-  private fun endTree(p : Process) {
-    if (onWindows) {
-      try { Process.run("taskkill", "/PID", "${p.pid}", "/T", "/F", timeout = 30.seconds) } catch (e : Exception) { p.kill() }
-    } else {
-      p.kill()
-    }
+    // What a check and all it starts may hold together: no test of the suite comes near either.
+    val checkLimits = ProcessLimits(memory = 8 * 1024 * 1024 * 1024, processes = 64)
   }
 
   private fun splitLines(text : string) : List<string> {

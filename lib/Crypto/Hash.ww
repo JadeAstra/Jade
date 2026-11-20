@@ -1,0 +1,130 @@
+// ---- Hashes (networking plan, part 2, 2026-11-20) ----
+// A hash makes a short digest of any number of bytes, the same bytes always giving the same
+// digest and no other bytes found to give it. The work is done in C++ (src/crypto), on the
+// processor's SHA instructions where it has them.
+//
+//   val digest = Sha256.hash("hello".toBytes())          // 32 bytes, at once
+//   val h = Sha512()                                      // or a piece at a time
+//   for (part in parts) { h.update(part) }
+//   val sum = h.digest()
+//   Sha3.hash(data, bits = 512)                           // SHA-3, 224 to 512 bits
+//   Shake(256).update(seed).read(100)                     // as many bytes as wanted
+//
+// A hash object is for one thread at a time; copy() gives one in the same state for another.
+
+// What every hash does. Sha256, Sha224, Sha384, Sha512, Sha3 and Shake are hashes.
+abstract class Hash(internal val kind : int, internal val shakeSize : int = 0) {
+  internal var state : any = __crypto.hashNew(kind, shakeSize)
+
+  // The size of its digest in bytes: 32 for SHA-256.
+  val size : int = __crypto.hashSize(kind, shakeSize)
+  // The bytes it takes in at a time, which HMAC pads a key to: 64 for SHA-256, 128 for SHA-512.
+  val blockSize : int = __crypto.hashBlockSize(kind)
+
+  // Takes in `size` of the bytes from `offset`, and gives the hash, to take more.
+  fun update(data : Bytes, offset : int = 0, size : int = data.size - offset) : Hash {
+    __crypto.hashUpdate(state, data, offset, size)
+    return this
+  }
+  // The digest of all taken in since it was made or last gave one; then it starts again.
+  fun digest() : Bytes => __crypto.hashFinish(state)
+  // The digest written into `into` at `at`, as digest() gives it.
+  fun digestInto(into : Bytes, at : int = 0) {
+    __crypto.hashFinishInto(state, into, at)
+  }
+  // Starts again, as if new.
+  fun reset() {
+    __crypto.hashReset(state)
+  }
+  // A hash of the same kind in the same state, to go on with apart: the digest of a common
+  // start, say, and of each of several endings.
+  fun copy() : Hash {
+    val made = fresh()
+    made.state = __crypto.hashCopy(state)
+    return made
+  }
+  // A new hash of this kind.
+  internal abstract fun fresh() : Hash
+}
+
+// SHA-256 (FIPS 180-4): a digest of 32 bytes.
+class Sha256 : Hash(1) {
+  static {
+    // The digest of `size` of the bytes from `offset`.
+    fun hash(data : Bytes, offset : int = 0, size : int = data.size - offset) : Bytes => __crypto.digest(1, 0, data, offset, size)
+  }
+  internal override fun fresh() : Hash => Sha256()
+}
+
+// SHA-224 (FIPS 180-4): SHA-256 started elsewhere and cut to 28 bytes.
+class Sha224 : Hash(10) {
+  static {
+    // The digest of `size` of the bytes from `offset`.
+    fun hash(data : Bytes, offset : int = 0, size : int = data.size - offset) : Bytes => __crypto.digest(10, 0, data, offset, size)
+  }
+  internal override fun fresh() : Hash => Sha224()
+}
+
+// SHA-384 (FIPS 180-4): SHA-512 started elsewhere and cut to 48 bytes.
+class Sha384 : Hash(2) {
+  static {
+    // The digest of `size` of the bytes from `offset`.
+    fun hash(data : Bytes, offset : int = 0, size : int = data.size - offset) : Bytes => __crypto.digest(2, 0, data, offset, size)
+  }
+  internal override fun fresh() : Hash => Sha384()
+}
+
+// SHA-512 (FIPS 180-4): a digest of 64 bytes.
+class Sha512 : Hash(3) {
+  static {
+    // The digest of `size` of the bytes from `offset`.
+    fun hash(data : Bytes, offset : int = 0, size : int = data.size - offset) : Bytes => __crypto.digest(3, 0, data, offset, size)
+  }
+  internal override fun fresh() : Hash => Sha512()
+}
+
+// SHA-3 (FIPS 202) of 224, 256, 384 or 512 bits: a digest of a quarter, a half... of `bits`
+// / 8 bytes. An IllegalArgumentException for another size.
+class Sha3(val bits : int = 256) : Hash(__sha3Kind(bits)) {
+  static {
+    // The SHA-3 digest of `bits` of `size` of the bytes from `offset`.
+    fun hash(data : Bytes, bits : int = 256, offset : int = 0, size : int = data.size - offset) : Bytes =>
+      __crypto.digest(__sha3Kind(bits), 0, data, offset, size)
+  }
+  internal override fun fresh() : Hash => Sha3(bits)
+}
+
+// SHAKE128 or SHAKE256 (FIPS 202): a hash that gives as many bytes as are asked for. digest()
+// gives the first `size` (by default 32 for SHAKE128, 64 for SHAKE256); read(n) gives the next n,
+// and the first read ends what is taken in. An IllegalArgumentException for `bits` other than
+// 128 and 256.
+class Shake(val bits : int = 256, size : int = bits / 4) : Hash(__shakeKind(bits), size) {
+  // Takes in `size` of the bytes from `offset`, and gives the SHAKE, to take more or read.
+  override fun update(data : Bytes, offset : int = 0, size : int = data.size - offset) : Shake {
+    super.update(data, offset, size)
+    return this
+  }
+  // The next `count` bytes of its output. Taking in more after a read starts a new message.
+  fun read(count : int) : Bytes => __crypto.hashSqueeze(state, count)
+  internal override fun fresh() : Hash => Shake(bits, size)
+}
+
+// The number the C++ knows SHA-3 of `bits` by.
+fun __sha3Kind(bits : int) : int {
+  return when (bits) {
+    224 -> 4
+    256 -> 5
+    384 -> 6
+    512 -> 7
+    else -> throw IllegalArgumentException("SHA-3 is 224, 256, 384 or 512 bits, not $bits")
+  }
+}
+
+// The number the C++ knows SHAKE of `bits` by.
+fun __shakeKind(bits : int) : int {
+  return when (bits) {
+    128 -> 8
+    256 -> 9
+    else -> throw IllegalArgumentException("SHAKE is 128 or 256 bits, not $bits")
+  }
+}

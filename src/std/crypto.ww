@@ -1,0 +1,32 @@
+// ---- What import Crypto is built on (networking plan, part 2, 2026-11-20) ----
+// The primitives in C++ (src/crypto), declared here with their types, as the standard library's
+// own are: lib/Crypto calls them. A program uses lib/Crypto's classes, not these.
+
+external object __crypto {
+  fun hashNew(kind : int, size : int) : any
+  fun hashUpdate(hash : any, data : Bytes, offset : int, count : int)
+  fun hashFinish(hash : any) : Bytes
+  fun hashFinishInto(hash : any, into : Bytes, at : int)
+  fun hashSqueeze(hash : any, count : int) : Bytes
+  fun hashCopy(hash : any) : any
+  fun hashReset(hash : any)
+  fun hashSize(kind : int, size : int) : int
+  fun hashBlockSize(kind : int) : int
+  fun digest(kind : int, size : int, data : Bytes, offset : int, count : int) : Bytes
+  fun macNew(kind : int, key : Bytes) : any
+  fun macUpdate(mac : any, data : Bytes, offset : int, count : int)
+  fun macFinish(mac : any) : Bytes
+  fun macCopy(mac : any) : any
+  fun macReset(mac : any)
+  fun pbkdf2(kind : int, password : Bytes, salt : Bytes, iterations : int, size : int) : Bytes
+  fun argon2id(password : Bytes, salt : Bytes, secret : Bytes?, data : Bytes?, iterations : int, memory : int, lanes : int, size : int) : Bytes
+  fun blake2b(data : Bytes, size : int, key : Bytes?) : Bytes
+  fun aeadNew(kind : int, key : Bytes) : any
+  fun aeadSeal(cipher : any, nonce : Bytes, aad : Bytes?, from : Bytes, offset : int, count : int, into : Bytes, at : int) : int
+  fun aeadOpen(cipher : any, nonce : Bytes, aad : Bytes?, from : Bytes, offset : int, count : int, into : Bytes, at : int) : int
+  fun equal(a : Bytes, b : Bytes) : bool
+  fun wipe(secret : Bytes)
+  fun instructions() : List<string>
+  fun setPortable(on : bool)
+  fun portable() : bool
+}

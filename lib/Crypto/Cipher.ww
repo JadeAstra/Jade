@@ -1,0 +1,82 @@
+// ---- Authenticated encryption (networking plan, part 2, 2026-11-20) ----
+// An AEAD cipher keeps a message secret and makes any change to it found: seal() encrypts and
+// adds a 16-byte tag, open() checks the tag and only then decrypts. Data given as `aad` is
+// checked too but not encrypted (a record's header, say). A nonce must never be used twice with
+// the same key: a counter, or 12 random bytes for each message.
+//
+//   val key = SecureRandom.bytes(32)
+//   val cipher = AesGcm(key)                        // or ChaCha20Poly1305(key)
+//   val nonce = SecureRandom.bytes(12)
+//   val sealed = cipher.seal(nonce, "secret".toBytes())
+//   val plain = cipher.open(nonce, sealed)          // null where it was changed
+//
+// sealInto and openInto work on part of a Bytes in place, as a TLS record is sealed behind its
+// header. A cipher object may be used from several threads at once.
+
+// What both ciphers do.
+abstract class Aead(internal val kind : int, key : Bytes) {
+  private val state : any = __crypto.aeadNew(kind, key)
+
+  static {
+    // The size of the tag seal() adds: 16 bytes.
+    const tagSize = 16
+  }
+
+  // `plaintext` encrypted, with its tag after it: tagSize bytes longer.
+  fun seal(nonce : Bytes, plaintext : Bytes, aad : Bytes? = null) : Bytes {
+    val out = Bytes(plaintext.size + 16)
+    __crypto.aeadSeal(state, nonce, aad, plaintext, 0, plaintext.size, out, 0)
+    return out
+  }
+  // The plaintext of what seal() made, or null where it is not authentic: changed, cut short,
+  // or sealed with another key, nonce or aad. Nothing of it is decrypted then.
+  fun open(nonce : Bytes, sealed : Bytes, aad : Bytes? = null) : Bytes? {
+    if (sealed.size < 16) { return null }
+    val out = Bytes(sealed.size - 16)
+    return __crypto.aeadOpen(state, nonce, aad, sealed, 0, sealed.size, out, 0) < 0 ? null : out
+  }
+  // `size` bytes of `from` at `offset` encrypted into `into` at `at`, the tag after them; gives
+  // the count written, size + tagSize. `into` may be `from` with `at` the same as `offset`.
+  fun sealInto(into : Bytes, at : int, from : Bytes, offset : int, size : int, nonce : Bytes, aad : Bytes? = null) : int =>
+    __crypto.aeadSeal(state, nonce, aad, from, offset, size, into, at)
+  // `size` sealed bytes of `from` at `offset` (the tag their last 16) checked and decrypted into
+  // `into` at `at`; gives the count written, size - tagSize, or -1 where they are not authentic,
+  // with nothing written. In place as sealInto.
+  fun openInto(into : Bytes, at : int, from : Bytes, offset : int, size : int, nonce : Bytes, aad : Bytes? = null) : int =>
+    __crypto.aeadOpen(state, nonce, aad, from, offset, size, into, at)
+}
+
+// AES-GCM (NIST SP 800-38D) with a key of 16, 24 or 32 bytes (AES-128, -192, -256), on the
+// processor's AES and carry-less multiply where it has them; a nonce of 12 bytes is the one to
+// use (others are taken, as GCM allows). An IllegalArgumentException for another key size.
+class AesGcm(key : Bytes) : Aead(1, key)
+
+// ChaCha20-Poly1305 (RFC 8439) with a 32-byte key and a 12-byte nonce: as safe as AES-GCM and
+// as fast with no AES instructions. An IllegalArgumentException for another key size.
+class ChaCha20Poly1305(key : Bytes) : Aead(2, key)
+
+// What every secret needs.
+object Secrets {
+  // Whether the bytes are the same, in a time that depends on their size alone: for MACs and
+  // tags, where an early stop would tell an attacker how much of a guess was right.
+  fun equal(a : Bytes, b : Bytes) : bool => __crypto.equal(a, b)
+  // Zeros the bytes, so that a key is not left in memory once done with.
+  fun wipe(secret : Bytes) {
+    __crypto.wipe(secret)
+  }
+}
+
+// How the primitives run: on the processor's instructions, or portable code everywhere (for
+// tests and timing). Both give the same results and are constant-time.
+object CryptoEngine {
+  // The processor's instructions in use: "aes", "clmul" and "sha" on most x86-64 machines; none
+  // where portable is set.
+  val instructions : List<string>
+    get() => __crypto.instructions()
+  // Whether the portable code is used everywhere. Set it with no other thread in a primitive.
+  var portable : bool
+    get() => __crypto.portable()
+    set(on) {
+      __crypto.setPortable(on)
+    }
+}
