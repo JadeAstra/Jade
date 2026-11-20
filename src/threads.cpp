@@ -323,6 +323,7 @@ void VM::safePoint() {
         timeLimitPassed_ = false;
         throw runtimeError(Thrown::AssertionError, "the test ran longer than its time limit, " + std::to_string(timeLimitMillis_.load()) + " ms");
     }
+    if (sampleDue_.load(std::memory_order_relaxed) && sampleDue_.exchange(false)) takeSample();  // ww --profile
     if (keyCalls_ > 0) return;  // inside a key's == or hashCode (D26)
     if (bytesAllocated_ > nextGC_) collectGarbage();
     if (attention_.load(std::memory_order_relaxed)) {

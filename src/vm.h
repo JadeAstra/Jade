@@ -1472,7 +1472,17 @@ private:
     bool nativeOff_ = false;
     // Whether a safe point has work besides collecting, kept up while it has (a stop, a limit,
     // steps counted).
-    bool wantsAttention() const { return stopRequested_.load() || timeLimitPassed_.load() || stepsLeft_ >= 0; }
+    bool wantsAttention() const { return stopRequested_.load() || timeLimitPassed_.load() || stepsLeft_ >= 0 || sampleDue_.load(); }
+public:
+    // ww --profile's clock asks for a sample: the next safe point hands the calls under way to
+    // the profiler (profile.cpp). Called from the clock's thread.
+    void sampleWanted() {
+        sampleDue_ = true;
+        attention_ = true;
+    }
+private:
+    std::atomic<bool> sampleDue_{false};
+    void takeSample();
 
     // Worker threads for work that blocks (see blocking()).
     struct Workers;

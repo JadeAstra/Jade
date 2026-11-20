@@ -3,6 +3,7 @@
 #include "native/layout.h"
 
 #include "builtins.h"  // addOverflows and the like (D27)
+#include "profile.h"  // ww --profile
 
 #include <algorithm>
 #include <array>
@@ -125,9 +126,11 @@ VM::VM(bool worker)
     opNames_[static_cast<int>(Op::Ge)] = names.opGe;
 
     registerBuiltins(*this);
+    if (!worker) profile::attach(*this);  // the program's VM, where ww --profile is on
 }
 
 VM::~VM() {
+    profile::detach(*this);
     dropWaitingBuilds();  // what this VM asked the builder for, which reads its objects
     parallelPool_.reset();  // its cores first: they work on this VM's objects
     dropWaitingBuilds();    // (and the run code words its cores left waiting for it as they ended)
@@ -1827,6 +1830,31 @@ WwThrow VM::outOfMemory() {
 }
 
 std::vector<std::string> VM::captureTrace() const { return captureTraceFrom(frameCount_ - 1); }
+
+// A sample for ww --profile: every call under way, innermost first, calls put in place as the
+// calls they were (as captureTraceFrom), on the thread running.
+void VM::takeSample() {
+    std::vector<profile::Call> calls;
+    calls.reserve(static_cast<size_t>(frameCount_) + 4);
+    for (int i = frameCount_ - 1; i >= 0; i--) {
+        const CallFrame& f = frames_[static_cast<size_t>(i)];
+        const FunctionProto* p = f.closure->proto;
+        size_t offset = f.ip != nullptr ? static_cast<size_t>(f.ip - p->run.data()) : 0;
+        if (offset > 0) offset--;
+        int at = offset < p->runLines.size() ? p->runLines[offset] : 0;
+        while (at >= kInlinedLine && static_cast<size_t>(at - kInlinedLine) < p->inlined.size()) {
+            const FunctionProto::InlinedCall& call = p->inlined[static_cast<size_t>(at - kInlinedLine)];
+            calls.push_back(profile::Call{call.name, call.source, call.line});
+            at = call.callLine;
+        }
+        // A lambda is known by where it is written.
+        std::string name = p->name;
+        if (name == "<lambda>" && !p->runLines.empty() && p->runLines.front() > 0 && p->runLines.front() < kInlinedLine)
+            name += ":" + std::to_string(p->runLines.front());
+        calls.push_back(profile::Call{std::move(name), p->source, at});
+    }
+    profile::record(calls, thread_ != nullptr ? thread_->name : std::string());
+}
 
 // The calls under way from frame `top` down, innermost first: a deep stack keeps its ten
 // innermost calls and its two outermost.
@@ -6166,7 +6194,10 @@ void VM::run(int baseFrame) {
 // Where the collector may run, and where a thread gives way to another.
 #define GC_SAFE_POINT()                                                                    \
     do {                                                                                   \
-        if (bytesAllocated_ > nextGC_ || attention_.load(std::memory_order_relaxed)) safePoint(); \
+        if (bytesAllocated_ > nextGC_ || attention_.load(std::memory_order_relaxed)) {         \
+            SAVE_IP(); /* where it is, for a sample (ww --profile) */                      \
+            safePoint();                                                                   \
+        }                                                                                  \
     } while (0)
 
 // The fast path's operands, read where the instruction is, before ip moves past it.

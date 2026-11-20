@@ -2,6 +2,7 @@
 // (M6.5 part 5). See run.h.
 
 #include "run.h"
+#include "profile.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -105,6 +106,7 @@ int runProgram(VM& vm, Program& program, int entry) {
         return image.str();
     };
     vm.onThreadExit = [](int code) {
+        profile::finish();  // ww --profile: written before the process ends here
         std::cout.flush();
         std::cerr.flush();
         std::_Exit(code);
@@ -141,6 +143,7 @@ int runProgram(VM& vm, Program& program, int entry) {
     // A daemon thread, or a worker still waiting in a read, cannot be left running while the
     // VM is taken apart under it: the process ends here instead.
     if (vm.threadsAlive()) {
+        profile::finish();  // ww --profile: written before the process ends here
         std::cout.flush();
         std::cerr.flush();
         std::_Exit(code);

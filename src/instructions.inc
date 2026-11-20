@@ -1454,6 +1454,7 @@ CASE(Loop) {
     DONE();
 }
 COLD(Loop) {
+    SAVE_IP();  // where it is, for a sample (ww --profile)
     safePoint();
     DONE();
 }

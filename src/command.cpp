@@ -23,6 +23,7 @@
 #include "compiler.h"
 #include "run.h"
 #include "vm.h"
+#include "profile.h"
 #include "native/native.h"
 
 #ifdef _WIN32
@@ -335,6 +336,15 @@ const HelpEntry kHelp[] = {
      "Written before any command (ww --interpret <file>, ww --interpret test ...): the program is run by the VM alone,\n"
      "with no native code made for its loops and functions. For comparing, and for finding whether a problem is\n"
      "native code's. WW_NATIVE=0 does the same (ww --help settings)."},
+    {"--profile", "", 2, "ww --profile[=<file>] <file> [args...]", "", "where the program spends its time, sampled",
+     "Written before the command (ww --profile game.ww, ww --profile=out.txt test ...): every millisecond the program\n"
+     "is asked where it is, and at its next loop turn or call the calls under way are counted. As the program ends\n"
+     "the report is written to the file (ww-profile.txt where none is named): the functions by their own time (the\n"
+     "code in them) and by their total time (with what they call), and the lines by their own time. The stacks are\n"
+     "written beside it (<file>.folded) for a flame graph, which speedscope.app or flamegraph.pl draw. Only code\n"
+     "running counts, on any of the program's threads; a thread asleep or waiting is not counted. A sample waits for\n"
+     "the next loop turn or call, so a short function that does neither has its time counted mostly in its caller.\n"
+     "WW_PROFILE=<file> does the same; WW_PROFILE_INTERVAL=<microseconds> samples more or less often."},
     // -- For building ww itself --
     {"--native-check", "", 3, "ww --native-check", "", "check native code (the build runs it)",
      "Checks the stencils native code is made of, rebuilt from the table ww.exe carries, against the hash taken when\n"
@@ -354,6 +364,8 @@ const HelpEntry kHelp[] = {
      "  WW_NATIVE_BACKGROUND=0       native code made on the program's own thread, not on another core\n"
      "  WW_CORES=<n>                 how many cores a parallel section uses\n"
      "  WW_TIMES=1                   how long the program took to be ready to run, and its parts, on standard error\n"
+     "  WW_PROFILE=<file>            where the program spends its time, written to the file, as ww --profile=<file>\n"
+     "  WW_PROFILE_INTERVAL=<us>     how often --profile samples, in microseconds (1000)\n"
      "For testing ww itself: WW_GC_STRESS=1 (a collection at every safe point), WW_THREAD_STRESS=1 (threads change\n"
      "at every safe point), WW_CHECK_NATIVE_RESULTS=1 (every C++ function's result checked against its declaration),\n"
      "WW_COPY_READS=1 (every read from a list of values a copy), WW_CRASH_STACK=1 (on Windows, a crash writes the\n"
@@ -1469,6 +1481,7 @@ int testFilesCommand(const std::vector<std::string>& given) {
             const bool more = &path != &files.back();
             if (more) std::cout << "  a thread is still running: the files after this one are not tested\n";
             const int code = counts();
+            profile::finish();
             std::cout.flush();
             std::cerr.flush();
             std::_Exit(more ? 1 : code);
@@ -1480,9 +1493,19 @@ int testFilesCommand(const std::vector<std::string>& given) {
 int dispatch(const std::vector<std::string>& given) {
     // `ww --interpret ...`: everything the VM's own way, no native code made (M9.5).
     std::vector<std::string> args = given;
-    if (!args.empty() && args[0] == "--interpret") {
-        ww::native::setEnabled(false);
+    // `ww --profile[=file] ...`, or WW_PROFILE=file: where the program spends its time, sampled.
+    std::string profileTo;
+    if (const char* set = std::getenv("WW_PROFILE"); set != nullptr && *set != '\0' && std::string(set) != "0")
+        profileTo = std::string(set) == "1" ? "ww-profile.txt" : set;
+    while (!args.empty() && (args[0] == "--interpret" || args[0] == "--profile" || args[0].rfind("--profile=", 0) == 0)) {
+        if (args[0] == "--interpret") ww::native::setEnabled(false);
+        else profileTo = args[0] == "--profile" ? "ww-profile.txt" : args[0].substr(10);
         args.erase(args.begin());
+    }
+    if (!profileTo.empty()) {
+        int every = 1000;
+        if (const char* set = std::getenv("WW_PROFILE_INTERVAL"); set != nullptr && std::atoi(set) > 0) every = std::atoi(set);
+        ww::profile::start(profileTo, every);
     }
     if (args.empty()) return shell();
 

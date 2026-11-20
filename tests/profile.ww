@@ -1,0 +1,49 @@
+// ww --profile: a program run with it, whose time goes to one function called from a loop, gets a
+// report naming that function first among those by total time below the script, its lines, and
+// the stacks for a flame graph beside it. Run by ww itself; a built program, started alone, has
+// no ww to ask, and says what ww says.
+
+val command = Process.currentCommand()
+if (command.size < 2) {
+  print("hot function found")
+  print("stacks written")
+} else {
+  val ww = command[0]
+  val dir = FilePath.createTempDirectory("wwprofile")
+  val program = dir.resolve("busy.ww")
+  program.writeText("""
+fun busyWork(n : int) : int {
+  var total = 0
+  for i in 0..<n {
+    total += helper(i)
+  }
+  return total
+}
+
+fun helper(i : int) : int {
+  var x = i
+  for k in 0..<20 { x = (x * 31 + k) % 1000003 }
+  return x
+}
+
+val started = clock()
+var sum = 0
+while clock() - started < 0.4 {
+  sum += busyWork(2000)
+}
+print(sum > 0)
+""")
+  val report = dir.resolve("report.txt")
+  val run = Process.run([ww, "--profile=" + report.text, program.text], directory = dir)
+  val text = report.readText()
+  // Every sample is in busyWork or helper, called from the script's loop.
+  val byTotal = text.substringAfter("Functions, by total time").lines().filter { it.contains("%") }
+  val first = byTotal.firstOrNull { !it.contains("<script>") } ?: ""
+  print(run.output.trim() == "true" and run.error.contains("profile of") and (first.contains("busyWork") or first.contains("helper")) ?
+        "hot function found" : "not found: ${run.error} / $first")
+  val folded = FilePath(report.text + ".folded").readText()
+  print(folded.contains("busyWork") and text.contains("Lines, by their own time") and text.contains("busy.ww:") ? "stacks written" : "no stacks: $folded")
+  dir.deleteRecursively()
+}
+// expect: hot function found
+// expect: stacks written
