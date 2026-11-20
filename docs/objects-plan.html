@@ -191,6 +191,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The look-up skipped</strong>: each <code>INVOKE</code> keeps the class it last met and the method found for it.</li>
 </ol>
 <p>Gate, in place of the one above: a call from native code to a method with a whole function's region at 8 ns or less over its body (<code>calls2.ww</code>'s method row, 22.7 ns, at 13 or less); the VM's own call no slower; toww measured.</p>
+<p><strong>Part 3 set aside for part 4</strong> (the user, 2026-11-20, as recommended). The crossing was looked at piece by piece: finding the region among the function's (cached in a trial, it saved nothing), setting up its context, the call into its machine code with its registers loaded and stored again, and the VM doing the <code>RETURN</code> and the caller's next instruction. About 10 ns are spread over all of them; what can go now is about 2 ns (the look-up kept at each <code>INVOKE</code>) and perhaps 1 to 3 (a region doing its own <code>RETURN</code>). The crossing itself goes with calls made by native code, part 5, on the emitter; these two small steps are left for after part 4.</p>
 
 <h2 id="op-p4">Part 4: objects made cheaply</h2>
 <p>Each object is made by its own <code>new</code> (the C++ heap's lock and search), linked into the collector's list, counted, and freed by its own <code>delete</code> when it is collected; its constructor is a call of its own. The work:</p>
