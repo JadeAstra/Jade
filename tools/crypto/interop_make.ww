@@ -1,0 +1,34 @@
+// The ww side of tools/crypto/interop.py: keys of ww's own making, and what ww does with them,
+// written as JSON for Python's cryptography package (OpenSSL) to check.
+import Crypto.*
+
+val out : open Map<string, any?> = {:}
+val msg = SecureRandom.bytes(200)
+out["msg"] = msg.toHex()
+
+val a = X25519PrivateKey.generate()
+val b = X25519PrivateKey.generate()
+out["x25519"] = {"private": a.bytes.toHex(), "public": a.publicKey.bytes.toHex(), "peer": b.publicKey.bytes.toHex(), "shared": a.agree(b.publicKey).toHex()}
+
+val ed = Ed25519PrivateKey.generate()
+out["ed25519"] = {"seed": ed.bytes.toHex(), "public": ed.publicKey.bytes.toHex(), "sig": ed.sign(msg).toHex()}
+
+val p = P256PrivateKey.generate()
+val q = P256PrivateKey.generate()
+out["p256"] = {"private": p.bytes.toHex(), "public": p.publicKey.bytes.toHex(), "compressed": p.publicKey.compressed.toHex(), "peer": q.publicKey.bytes.toHex(),
+               "shared": p.agree(q.publicKey).toHex(), "sha256": p.sign(msg).toHex(), "sha384": p.sign(msg, Sha384()).toHex(),
+               "raw": p.sign(msg, format = EcdsaFormat.raw).toHex()}
+
+val keys : open List<any?> = []
+for (bits in [2048, 3072]) {
+  val k = RsaPrivateKey.generate(bits)
+  val entry : open Map<string, any?> = {:}
+  for (name in ["n", "e", "d", "p", "q", "dp", "dq", "qinv"]) { entry[name] = k.part(name)!!.toHex() }
+  entry["pkcs1sha256"] = k.sign(msg).toHex()
+  entry["pkcs1sha512"] = k.sign(msg, Sha512()).toHex()
+  entry["psssha256"] = k.sign(msg, Sha256(), RsaPadding.pss()).toHex()
+  entry["psssha384"] = k.sign(msg, Sha384(), RsaPadding.pss()).toHex()
+  keys.add(entry)
+}
+out["rsa"] = keys
+print(Json.write(out))

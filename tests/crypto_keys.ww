@@ -1,0 +1,95 @@
+// import Crypto's public keys (networking plan, part 3): with keys Python's cryptography package
+// (OpenSSL) made, ww gives the same shared secrets, the same Ed25519 public keys and signatures,
+// the same RFC 6979 ECDSA signatures and RSA PKCS#1 v1.5 signatures, byte for byte, and finds its
+// random-nonce ECDSA and its PSS signatures good (tests/data/crypto_keys_cases.json, made by
+// tools/crypto/keys_cases.py); the RFCs' own examples; keys of its own; and what is refused.
+// tools/crypto/interop.py checks the other way, ww's keys and signatures in Python.
+import Crypto.*
+
+val cases = Json.read(FilePath("data/crypto_keys_cases.json").readText()) as Map<string, any?>
+fun listOf(name : string) : List<Map<string, any?>> => (cases[name] as List<any?>).map { it as Map<string, any?> }
+fun hexOf(c : Map<string, any?>, key : string) : Bytes => (c[key] as string).hexToBytes()
+
+var wrong = 0
+fun check(kind : string, index : int, right : bool) {
+  if (!right) {
+    wrong++
+    print("$kind case $index went wrong")
+  }
+}
+
+for ((i, c) in listOf("x25519").withIndex()) {
+  check("x25519", i, X25519PrivateKey(hexOf(c, "private")).agree(X25519PublicKey(hexOf(c, "peer"))).toHex() == c["shared"])
+}
+for ((i, c) in listOf("ed25519").withIndex()) {
+  val key = Ed25519PrivateKey(hexOf(c, "seed"))
+  val sig = key.sign(hexOf(c, "msg"))
+  check("ed25519", i, key.publicKey.bytes.toHex() == c["public"] and sig.toHex() == c["sig"] and Ed25519PublicKey(hexOf(c, "public")).verify(hexOf(c, "msg"), sig))
+}
+for ((i, c) in listOf("p256").withIndex()) {
+  val key = P256PrivateKey(hexOf(c, "private"))
+  val msg = hexOf(c, "msg")
+  val pub = key.publicKey
+  check("p256 public", i, pub.bytes.toHex() == c["public"] and pub.compressed.toHex() == c["compressed"] and P256PublicKey(hexOf(c, "compressed")).bytes.toHex() == c["public"])
+  check("p256 ecdh", i, key.agree(P256PublicKey(hexOf(c, "peer"))).toHex() == c["shared"])
+  check("p256 rfc6979 sha256", i, key.sign(msg).toHex() == c["sha256"] and key.sign(msg, format = EcdsaFormat.raw).toHex() == c["sha256Raw"])
+  check("p256 rfc6979 sha512", i, key.sign(msg, Sha512()).toHex() == c["sha512"])
+  check("p256 verify", i, pub.verify(msg, hexOf(c, "random")) and pub.verify(msg, hexOf(c, "sha512"), Sha512()) and !pub.verify(msg, hexOf(c, "sha512")))
+}
+for ((i, c) in listOf("rsa").withIndex()) {
+  val key = RsaPrivateKey(hexOf(c, "n"), hexOf(c, "e"), hexOf(c, "d"), hexOf(c, "p"), hexOf(c, "q"), hexOf(c, "dp"), hexOf(c, "dq"), hexOf(c, "qinv"))
+  val alone = RsaPrivateKey(hexOf(c, "n"), hexOf(c, "e"), hexOf(c, "d"))   // without CRT
+  val msg = hexOf(c, "msg")
+  val pkcs1 = c["pkcs1"] as Map<string, any?>
+  val pss = c["pss"] as Map<string, any?>
+  for ((name, hash) in [Pair("sha256", Sha256() as Hash), Pair("sha384", Sha384() as Hash), Pair("sha512", Sha512() as Hash)]) {
+    check("rsa pkcs1 $name", i, key.sign(msg, hash).toHex() == pkcs1[name] and alone.sign(msg, hash).toHex() == pkcs1[name])
+    check("rsa pss $name", i, key.publicKey.verify(msg, (pss[name] as string).hexToBytes(), hash, RsaPadding.pss()))
+    val mine = key.sign(msg, hash, RsaPadding.pss())
+    check("rsa own pss $name", i, key.publicKey.verify(msg, mine, hash, RsaPadding.pss()) and !key.publicKey.verify(msg, mine, hash))
+  }
+  check("rsa bits", i, key.bits == [2048, 3072, 4096][i])
+}
+print("python's keys:", wrong == 0 ? "everything the same" : "$wrong wrong")   // expect: python's keys: everything the same
+
+// ---- The RFCs' examples ----
+// RFC 7748, 6.1: Alice and Bob.
+val alice = X25519PrivateKey("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a".hexToBytes())
+val bob = X25519PrivateKey("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb".hexToBytes())
+print(alice.publicKey.bytes.toHex())   // expect: 8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a
+print(alice.agree(bob.publicKey).toHex(), alice.agree(bob.publicKey).toHex() == bob.agree(alice.publicKey).toHex())
+// expect: 4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742 true
+// RFC 8032, 7.1, test 2.
+val ed = Ed25519PrivateKey("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb".hexToBytes())
+print(ed.publicKey.bytes.toHex())   // expect: 3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c
+print(ed.sign("72".hexToBytes()).toHex())
+// expect: 92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00
+// RFC 6979, A.2.5: P-256 with SHA-256, the message "sample".
+val p256 = P256PrivateKey("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721".hexToBytes())
+print(p256.sign("sample".toBytes(), format = EcdsaFormat.raw).toHex())
+// expect: efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8
+
+// ---- Keys of its own ----
+val mine = P256PrivateKey.generate()
+print(P256PrivateKey(mine.bytes).publicKey.bytes.toHex() == mine.publicKey.bytes.toHex(), mine.publicKey.bytes.size, mine.publicKey.compressed.size)   // expect: true 65 33
+val signer = Ed25519PrivateKey.generate()
+val signed = signer.sign("x".toBytes())
+print(signer.publicKey.verify("x".toBytes(), signed), signer.publicKey.verify("y".toBytes(), signed), signer.publicKey.verify("x".toBytes(), signed[0..<63]))   // expect: true false false
+val rsa = RsaPrivateKey.generate(1024)
+print(rsa.bits, rsa.part("e")!!.toHex(), rsa.publicKey.verify("m".toBytes(), rsa.sign("m".toBytes())))   // expect: 1024 010001 true
+
+// ---- What is refused ----
+for (bad in [{ X25519PrivateKey(Bytes(31)) }, { Ed25519PublicKey(Bytes(33)) }, { P256PrivateKey(Bytes(32)) }, { P256PublicKey(Bytes(65)) },
+             { X25519PrivateKey(Bytes(32).fill(1.toByte())).agree(X25519PublicKey(Bytes(32))) }, { RsaPrivateKey.generate(1000) },
+             { RsaPrivateKey.generate(2048, e = 4) }, { rsa.part("z") }, { RsaPadding.pss(-1) }]) {
+  try { bad() } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: an X25519 private key is 32 bytes, not 31
+// expect: an Ed25519 public key is 32 bytes, not 33
+// expect: a P-256 private key is 32 bytes, a number from 1 to n - 1
+// expect: not a point of P-256
+// expect: the peer's X25519 key is of small order: the shared secret would be all zeros
+// expect: an RSA key is 1024 to 16384 bits, an even number of them
+// expect: an RSA public exponent is odd, from 3 to 2^32 - 1
+// expect: an RSA key has no part 'z'
+// expect: a salt is 0 bytes or more, not -1

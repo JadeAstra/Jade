@@ -38,3 +38,29 @@ print("PBKDF2-SHA256 600,000".padEnd(28), "%8.0f ms".format((clock() - started) 
 val argon = clock()
 Argon2id.hash("password", key[0..<16])
 print("Argon2id t=3 m=64MiB p=4".padEnd(28), "%8.0f ms".format((clock() - argon) * 1000))
+
+// Public keys (part 3): operations a second.
+val xa = X25519PrivateKey.generate()
+val xb = X25519PrivateKey.generate().publicKey
+rate("X25519 agree", 0) { xa.agree(xb) }
+val edk = Ed25519PrivateKey.generate()
+val edm = block[0..<64]
+val eds = edk.sign(edm)
+val edp = edk.publicKey
+rate("Ed25519 sign", 0) { edk.sign(edm) }
+rate("Ed25519 verify", 0) { edp.verify(edm, eds) }
+val pk = P256PrivateKey.generate()
+val pp = P256PrivateKey.generate().publicKey
+val pkp = pk.publicKey
+val pks = pk.sign(edm)
+rate("P-256 ECDH", 0) { pk.agree(pp) }
+rate("P-256 ECDSA sign", 0) { pk.sign(edm) }
+rate("P-256 ECDSA verify", 0) { pkp.verify(edm, pks) }
+val rk = RsaPrivateKey.generate(2048)
+val rkp = rk.publicKey
+val rks = rk.sign(edm)
+rate("RSA-2048 sign", 0) { rk.sign(edm) }
+rate("RSA-2048 verify", 0) { rkp.verify(edm, rks) }
+val keygen = clock()
+for (i in 0..<5) { RsaPrivateKey.generate(2048) }
+print("RSA-2048 key pair".padEnd(28), "%8.0f ms".format((clock() - keygen) * 1000 / 5))

@@ -1,0 +1,355 @@
+// ---- Public-key cryptography (networking plan, part 3, 2026-11-20) ----
+// Key agreement (X25519, P-256 ECDH) and signatures (Ed25519, ECDSA over P-256, RSA), each key a
+// class of its own: a private key gives its public key, and keeps its secret to itself.
+//
+//   val mine = X25519PrivateKey.generate()
+//   val secret = mine.agree(X25519PublicKey(theirBytes))        // 32 bytes, both sides alike
+//
+//   val signer = Ed25519PrivateKey.generate()
+//   val sig = signer.sign(message)
+//   print(signer.publicKey.verify(message, sig))                // true
+//
+//   val rsa = RsaPrivateKey.generate(2048)                      // waits on its thread, a while
+//   val dkim = rsa.sign(headers, Sha256())                      // PKCS#1 v1.5
+//   rsa.publicKey.verify(headers, dkim, Sha256())
+//
+// The arithmetic is C++ (src/crypto), constant-time where a secret is in it. Keys are kept as
+// their raw numbers; reading and writing them as DER, PEM and PKCS#8 comes with the
+// certificates (part 4).
+
+// ---- X25519 ----
+
+// An X25519 private key: 32 random bytes (RFC 7748).
+class X25519PrivateKey {
+  private val secret : Bytes
+
+  // From its 32 bytes; an IllegalArgumentException for another size.
+  fun init(bytes : Bytes) {
+    if (bytes.size != 32) { throw IllegalArgumentException("an X25519 private key is 32 bytes, not ${bytes.size}") }
+    this.secret = Bytes(bytes)
+  }
+
+  static {
+    // A new key, from SecureRandom.
+    fun generate() : X25519PrivateKey => X25519PrivateKey(SecureRandom.bytes(32))
+  }
+
+  // The public key to give the other side.
+  val publicKey : X25519PublicKey
+    get() => X25519PublicKey(__crypto.x25519Public(secret))
+  // Its 32 bytes, a copy.
+  val bytes : Bytes
+    get() => Bytes(secret)
+
+  // The secret shared with the holder of `peer`'s private key: 32 bytes, the same both ways. An
+  // IllegalArgumentException where `peer` is a point of small order, which would make the secret
+  // all zeros, known to anyone.
+  fun agree(peer : X25519PublicKey) : Bytes {
+    val shared = __crypto.x25519(secret, peer.bytes)
+    if (shared == null) { throw IllegalArgumentException("the peer's X25519 key is of small order: the shared secret would be all zeros") }
+    return shared!!
+  }
+}
+
+// An X25519 public key: 32 bytes.
+class X25519PublicKey {
+  private val value : Bytes
+  // From its 32 bytes; an IllegalArgumentException for another size.
+  fun init(bytes : Bytes) {
+    if (bytes.size != 32) { throw IllegalArgumentException("an X25519 public key is 32 bytes, not ${bytes.size}") }
+    this.value = Bytes(bytes)
+  }
+  // Its 32 bytes, a copy.
+  val bytes : Bytes
+    get() => Bytes(value)
+}
+
+// ---- Ed25519 ----
+
+// An Ed25519 private key: a 32-byte seed (RFC 8032). Its signatures are 64 bytes, and the same
+// message always gives the same signature.
+class Ed25519PrivateKey {
+  private val seed : Bytes
+
+  // From its 32-byte seed; an IllegalArgumentException for another size.
+  fun init(bytes : Bytes) {
+    if (bytes.size != 32) { throw IllegalArgumentException("an Ed25519 private key is 32 bytes, not ${bytes.size}") }
+    this.seed = Bytes(bytes)
+  }
+
+  static {
+    // A new key, from SecureRandom.
+    fun generate() : Ed25519PrivateKey => Ed25519PrivateKey(SecureRandom.bytes(32))
+  }
+
+  // The public key that checks its signatures.
+  val publicKey : Ed25519PublicKey
+    get() => Ed25519PublicKey(__crypto.ed25519Public(seed))
+  // Its 32-byte seed, a copy.
+  val bytes : Bytes
+    get() => Bytes(seed)
+
+  // The 64-byte signature of the message.
+  fun sign(message : Bytes) : Bytes => __crypto.ed25519Sign(seed, message)
+}
+
+// An Ed25519 public key: 32 bytes.
+class Ed25519PublicKey {
+  private val value : Bytes
+  // From its 32 bytes; an IllegalArgumentException for another size.
+  fun init(bytes : Bytes) {
+    if (bytes.size != 32) { throw IllegalArgumentException("an Ed25519 public key is 32 bytes, not ${bytes.size}") }
+    this.value = Bytes(bytes)
+  }
+  // Its 32 bytes, a copy.
+  val bytes : Bytes
+    get() => Bytes(value)
+  // Whether `signature` is this key's signature of the message: false for one of any other size,
+  // or with S not below the group's order, or R not as encoded.
+  fun verify(message : Bytes, signature : Bytes) : bool => __crypto.ed25519Verify(value, message, signature)
+}
+
+// ---- P-256 ----
+
+// How an ECDSA signature is written: der, the ASN.1 SEQUENCE of two INTEGERs that X.509 and TLS
+// use; raw, r and s of 32 bytes each one after the other (IEEE P1363, as JOSE and WebCrypto use).
+enum EcdsaFormat { der, raw }
+
+// A P-256 private key (secp256r1): a number from 1 to n - 1, as 32 bytes, for ECDH and ECDSA.
+class P256PrivateKey {
+  private val secret : Bytes
+
+  // From its 32 bytes, big-endian; an IllegalArgumentException where they are no key.
+  fun init(bytes : Bytes) {
+    if (!__crypto.p256ValidPrivate(bytes)) { throw IllegalArgumentException("a P-256 private key is 32 bytes, a number from 1 to n - 1") }
+    this.secret = Bytes(bytes)
+  }
+
+  static {
+    // A new key, from SecureRandom.
+    fun generate() : P256PrivateKey {
+      while (true) {
+        val candidate = SecureRandom.bytes(32)
+        if (__crypto.p256ValidPrivate(candidate)) { return P256PrivateKey(candidate) }
+      }
+    }
+  }
+
+  // Its public key.
+  val publicKey : P256PublicKey
+    get() => P256PublicKey(__crypto.p256Public(secret))
+  // Its 32 bytes, a copy.
+  val bytes : Bytes
+    get() => Bytes(secret)
+
+  // ECDH: the shared secret (the x of the shared point, 32 bytes) with the holder of `peer`'s
+  // private key.
+  fun agree(peer : P256PublicKey) : Bytes {
+    val shared = __crypto.p256Ecdh(secret, peer.bytes)
+    if (shared == null) { throw IllegalArgumentException("the shared point is at infinity") }
+    return shared!!
+  }
+
+  // An ECDSA signature of the message hashed with `hash` (SHA-256 unless said), its nonce
+  // made from the key and the message (RFC 6979): the same message gives the same signature.
+  fun sign(message : Bytes, hash : Hash = Sha256(), format : EcdsaFormat = EcdsaFormat.der) : Bytes {
+    val rs = __crypto.p256Sign(secret, hash.kind, message)
+    return format == EcdsaFormat.raw ? rs : __derSignature(rs)
+  }
+}
+
+// A P-256 public key: a point on the curve.
+class P256PublicKey {
+  private val point : Bytes
+
+  // From its encoding: 65 bytes 04 X Y, or 33 bytes 02 X or 03 X (compressed). An
+  // IllegalArgumentException where it is no point of the curve.
+  fun init(bytes : Bytes) {
+    val checked = __crypto.p256Point(bytes)
+    if (checked == null) { throw IllegalArgumentException("not a point of P-256") }
+    this.point = checked!!
+  }
+
+  // Its 65 bytes, 04 X Y, a copy.
+  val bytes : Bytes
+    get() => Bytes(point)
+  // Its 33 bytes, compressed: 02 or 03 (y even or odd), then X.
+  val compressed : Bytes
+    get() {
+      val out = Bytes(33)
+      out[0] = (2 + (point[64].toInt() & 1)).toByte()
+      out.copyFrom(point, 1, 1, 1, 1, 32)
+      return out
+    }
+
+  // Whether `signature` is this key's ECDSA signature of the message hashed with `hash`. A DER
+  // signature is read strictly: anything but the one encoding of the numbers is false.
+  fun verify(message : Bytes, signature : Bytes, hash : Hash = Sha256(), format : EcdsaFormat = EcdsaFormat.der) : bool {
+    val rs = format == EcdsaFormat.raw ? signature : __rawSignature(signature)
+    if (rs == null or rs!!.size != 64) { return false }
+    return __crypto.p256Verify(point, hash.kind, message, rs!!)
+  }
+}
+
+// ---- RSA ----
+
+// How an RSA signature pads the message's hash: PKCS#1 v1.5 (deterministic, what DKIM and most
+// X.509 use), or PSS with a salt of `saltLength` random bytes (by default the hash's size) and
+// MGF1 over `mgfHash` (by default the signature's hash), as TLS 1.3 uses.
+class RsaPadding {
+  internal val pss : bool
+  internal val saltLength : int?
+  internal val mgfHash : Hash?
+
+  internal fun init(pss : bool, saltLength : int?, mgfHash : Hash?) {
+    this.pss = pss
+    this.saltLength = saltLength
+    this.mgfHash = mgfHash
+  }
+
+  static {
+    // PKCS#1 v1.5.
+    val pkcs1 = RsaPadding(false, null, null)
+    // PSS, with a salt of `saltLength` bytes (the hash's size if not given) and MGF1 over
+    // `mgfHash` (the signature's hash if not given).
+    fun pss(saltLength : int? = null, mgfHash : Hash? = null) : RsaPadding {
+      if (saltLength != null and saltLength!! < 0) { throw IllegalArgumentException("a salt is 0 bytes or more, not $saltLength") }
+      return RsaPadding(true, saltLength, mgfHash)
+    }
+  }
+}
+
+// An RSA private key: its numbers, big-endian (n, e, d, and for speed p, q, dP, dQ and qInv).
+class RsaPrivateKey {
+  internal val parts : List<Bytes?>
+
+  // From its numbers; p, q, dp, dq and qinv may be left out (signing is then about four times
+  // slower).
+  fun init(n : Bytes, e : Bytes, d : Bytes, p : Bytes? = null, q : Bytes? = null, dp : Bytes? = null, dq : Bytes? = null, qinv : Bytes? = null) {
+    this.parts = [n, e, d, p, q, dp, dq, qinv]
+  }
+
+  static {
+    // A new key of `bits` bits (2048 unless said, 1024 to 16384) with public exponent `e`
+    // (65537). It takes a while (a 2048-bit key about 0.1 s, a 4096-bit one seconds), waiting on
+    // the thread it runs on, as a read does.
+    fun generate(bits : int = 2048, e : int = 65537) : RsaPrivateKey {
+      val made = __crypto.rsaGenerate(bits, e)
+      return RsaPrivateKey(made[0], made[1], made[2], made[3], made[4], made[5], made[6], made[7])
+    }
+  }
+
+  // Its public key, n and e.
+  val publicKey : RsaPublicKey
+    get() => RsaPublicKey(parts[0]!!, parts[1]!!)
+  // Its size in bits.
+  val bits : int
+    get() => publicKey.bits
+  // Its numbers by name: "n", "e", "d", "p", "q", "dp", "dq", "qinv" (null where not given).
+  fun part(name : string) : Bytes? {
+    val at = ["n", "e", "d", "p", "q", "dp", "dq", "qinv"].indexOf(name)
+    if (at < 0) { throw IllegalArgumentException("an RSA key has no part '$name'") }
+    val value = parts[at]
+    return value == null ? null : Bytes(value!!)
+  }
+
+  // A signature of the message hashed with `hash`, padded as `padding` says (PKCS#1 v1.5 unless
+  // said); as long as the modulus. Checked with the public key before it is given.
+  fun sign(message : Bytes, hash : Hash = Sha256(), padding : RsaPadding = RsaPadding.pkcs1) : Bytes {
+    val mgf = padding.mgfHash ?: hash
+    return __crypto.rsaSign(parts, hash.kind, message, padding.pss, padding.saltLength ?: hash.size, mgf.kind)
+  }
+}
+
+// An RSA public key: its modulus n and exponent e, big-endian.
+class RsaPublicKey {
+  private val n : Bytes
+  private val e : Bytes
+
+  fun init(n : Bytes, e : Bytes) {
+    this.n = Bytes(n)
+    this.e = Bytes(e)
+  }
+
+  // Its modulus and exponent, copies.
+  val modulus : Bytes
+    get() => Bytes(n)
+  val exponent : Bytes
+    get() => Bytes(e)
+  // Its size in bits.
+  val bits : int
+    get() {
+      var first = 0
+      while (first < n.size and n[first].toInt() == 0) { first++ }
+      if (first == n.size) { return 0 }
+      var top = n[first].toInt()
+      var count = 0
+      while (top > 0) {
+        count++
+        top = top >> 1
+      }
+      return (n.size - first - 1) * 8 + count
+    }
+
+  // Whether `signature` is this key's signature of the message hashed with `hash`, padded as
+  // `padding` says; false for one of the wrong size, or not below the modulus.
+  fun verify(message : Bytes, signature : Bytes, hash : Hash = Sha256(), padding : RsaPadding = RsaPadding.pkcs1) : bool {
+    val mgf = padding.mgfHash ?: hash
+    return __crypto.rsaVerify(n, e, hash.kind, message, signature, padding.pss, padding.saltLength ?: hash.size, mgf.kind)
+  }
+}
+
+// ---- ECDSA's DER form ----
+
+// r and s (32 bytes each) as DER: SEQUENCE { INTEGER r, INTEGER s }, each in its fewest bytes.
+fun __derSignature(rs : Bytes) : Bytes {
+  val r = __derInteger(rs, 0)
+  val s = __derInteger(rs, 32)
+  val out = Bytes(2 + r.size + s.size)
+  out[0] = 0x30.toByte()
+  out[1] = (r.size + s.size).toByte()
+  out.copyFrom(r, 0, 1, 2, 1, r.size)
+  out.copyFrom(s, 0, 1, 2 + r.size, 1, s.size)
+  return out
+}
+
+// The 32 bytes at `at` as a DER INTEGER: leading zeros dropped, one 0 put back where the first
+// byte left would read as negative.
+fun __derInteger(rs : Bytes, at : int) : Bytes {
+  var first = at
+  while (first < at + 31 and rs[first].toInt() == 0) { first++ }
+  val pad = rs[first].toInt() >= 0x80 ? 1 : 0
+  val size = at + 32 - first
+  val out = Bytes(2 + pad + size)
+  out[0] = 0x02.toByte()
+  out[1] = (pad + size).toByte()
+  out.copyFrom(rs, first, 1, 2 + pad, 1, size)
+  return out
+}
+
+// r and s, 32 bytes each, from DER read strictly (one encoding of the numbers alone, nothing
+// after it); null where it is not that.
+fun __rawSignature(der : Bytes) : Bytes? {
+  if (der.size < 8 or der[0].toInt() != 0x30 or der[1].toInt() >= 0x80 or der[1].toInt() != der.size - 2) { return null }
+  val out = Bytes(64)
+  var at = 2
+  for (k in 0..<2) {
+    if (at + 2 > der.size or der[at].toInt() != 0x02) { return null }
+    val size = der[at + 1].toInt()
+    if (size == 0 or size >= 0x80 or at + 2 + size > der.size) { return null }
+    val start = at + 2
+    // Negative, or a needless leading zero: not DER.
+    if (der[start].toInt() >= 0x80) { return null }
+    if (size > 1 and der[start].toInt() == 0 and der[start + 1].toInt() < 0x80) { return null }
+    var from = start
+    var count = size
+    if (der[start].toInt() == 0 and size > 1) {
+      from++
+      count--
+    }
+    if (count > 32) { return null }
+    out.copyFrom(der, from, 1, 32 * k + 32 - count, 1, count)
+    at = start + size
+  }
+  return at == der.size ? out : null
+}

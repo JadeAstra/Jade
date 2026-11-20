@@ -14,6 +14,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace ww {
 namespace crypto {
@@ -152,6 +153,41 @@ private:
 
 // ChaCha20 (RFC 8439): the keystream from block `counter` XORed over `size` bytes.
 void chacha20(const uint8_t key[32], const uint8_t nonce[12], uint32_t counter, const uint8_t* in, uint8_t* out, size_t size);
+
+// ---- Public keys (networking plan, part 3) ----
+
+// X25519 (RFC 7748): the shared secret of a scalar and a peer's u; false where it is all zeros
+// (the peer's point of small order). The public u of a scalar.
+bool x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]);
+void x25519Public(uint8_t out[32], const uint8_t scalar[32]);
+
+// Ed25519 (RFC 8032): the public key of a 32-byte seed; a 64-byte signature; a check of one
+// (cofactorless, S below L, the public key and R canonical).
+void ed25519Public(uint8_t out[32], const uint8_t seed[32]);
+void ed25519Sign(uint8_t sig[64], const uint8_t seed[32], const uint8_t* message, size_t size);
+bool ed25519Verify(const uint8_t publicKey[32], const uint8_t* message, size_t size, const uint8_t sig[64]);
+
+// P-256: a point from its encoding (04 X Y, or 02/03 X), checked to be on the curve, as 04 X Y;
+// whether 32 bytes are a private key (1 to n - 1); its public point; ECDH's shared x (false for
+// infinity); an ECDSA signature (r, s) of a hash with RFC 6979's nonce (HMAC over `prototype`'s
+// kind); its check.
+bool p256Point(const uint8_t* bytes, size_t size, uint8_t out65[65]);
+bool p256ValidPrivate(const uint8_t d[32]);
+void p256Public(uint8_t out65[65], const uint8_t d[32]);
+bool p256Ecdh(uint8_t out32[32], const uint8_t d[32], const uint8_t point65[65]);
+void p256Sign(uint8_t r32[32], uint8_t s32[32], const uint8_t d[32], const uint8_t* hash, size_t hashSize, const Hash& prototype);
+bool p256Verify(const uint8_t point65[65], const uint8_t* hash, size_t hashSize, const uint8_t r32[32], const uint8_t s32[32]);
+
+// RSA (RFC 8017): a private key's numbers, big-endian with no leading zeros; p, q, dp, dq and
+// qinv may be empty (d alone is then used, without CRT).
+struct RsaKey {
+    std::vector<uint8_t> n, e, d, p, q, dp, dq, qinv;
+};
+bool rsaGenerate(size_t bits, uint64_t e, RsaKey& key, std::string& why);
+bool rsaSign(const RsaKey& key, HashKind kind, const uint8_t* message, size_t size, bool pss, size_t saltLen, HashKind mgfKind,
+             std::vector<uint8_t>& signature, std::string& why);
+bool rsaVerify(const std::vector<uint8_t>& n, const std::vector<uint8_t>& e, HashKind kind, const uint8_t* message, size_t size,
+               const std::vector<uint8_t>& signature, bool pss, size_t saltLen, HashKind mgfKind);
 
 }  // namespace crypto
 }  // namespace ww

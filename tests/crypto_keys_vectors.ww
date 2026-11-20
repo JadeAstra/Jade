@@ -1,0 +1,154 @@
+// import Crypto's public keys against Project Wycheproof's test vectors (tests/data/wycheproof,
+// Apache 2.0): X25519, Ed25519, P-256 ECDH with points of every encoding, ECDSA over P-256 with
+// SHA-256 and SHA-512 in DER and raw form, RSA PKCS#1 v1.5 signatures of 2048 to 4096 bits, and
+// RSA-PSS with every salt and MGF the files try (networking plan, part 3). Valid cases must pass,
+// invalid ones fail; "acceptable" ones may do either, but where a result is given it must be
+// right. A case that goes wrong is printed with its number; one using SHA-1, which import Crypto
+// has not, is passed over.
+//
+// Quick (WW_TEST_QUICK=1, under GC stress, where reading 100 KB of JSON takes seconds): the Ed25519
+// and smallest RSA-PSS files.
+import Crypto.*
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+
+fun load(name : string) : Map<string, any?> => Json.read(FilePath("data/wycheproof/$name").readText()) as Map<string, any?>
+fun hexOf(m : Map<string, any?>, key : string) : Bytes => (m[key] as string).hexToBytes()
+
+var cases = 0
+var wrong = 0
+var passedOver = 0
+
+// One case: `outcome` is null where the code refused (an exception or false), else what it gave
+// (true for a signature found good, the bytes for a secret).
+fun check(file : string, test : Map<string, any?>, accepted : bool, rightValue : bool) {
+  cases++
+  val result = test["result"] as string
+  val fine = result == "valid" ? accepted and rightValue : result == "invalid" ? !accepted : (!accepted or rightValue)
+  if (!fine) {
+    wrong++
+    print("$file: case ${test["tcId"]} ($result, ${test["comment"]}) went wrong")
+  }
+}
+
+fun eachTest(file : string, each : (Map<string, any?>, Map<string, any?>) -> unit) {
+  for (g in load(file)["testGroups"] as List<any?>) {
+    val group = g as Map<string, any?>
+    for (t in group["tests"] as List<any?>) { each(group, t as Map<string, any?>) }
+  }
+}
+
+fun hashNamed(name : string) : Hash? {
+  return when (name) {
+    "SHA-224" -> Sha224()
+    "SHA-256" -> Sha256()
+    "SHA-384" -> Sha384()
+    "SHA-512" -> Sha512()
+    "SHA3-224" -> Sha3(224)
+    "SHA3-256" -> Sha3(256)
+    "SHA3-384" -> Sha3(384)
+    "SHA3-512" -> Sha3(512)
+    else -> null
+  }
+}
+
+// 32 bytes, from a number's bytes with leading zeros or fewer.
+fun scalar32(b : Bytes) : Bytes? {
+  var first = 0
+  while (first < b.size and b[first].toInt() == 0) { first++ }
+  if (b.size - first > 32) { return null }
+  val out = Bytes(32)
+  out.copyFrom(b, first, 1, 32 - (b.size - first), 1, b.size - first)
+  return out
+}
+
+fun x25519File() {
+  eachTest("x25519_test.json") { group, test ->
+    val expected = hexOf(test, "shared")
+    try {
+      val got = X25519PrivateKey(hexOf(test, "private")).agree(X25519PublicKey(hexOf(test, "public")))
+      check("x25519", test, true, got.toHex() == expected.toHex())
+    } catch (e : IllegalArgumentException) {
+      check("x25519", test, false, false)
+    }
+  }
+}
+
+fun ed25519File() {
+  eachTest("ed25519_test.json") { group, test ->
+    val key = ((group["publicKey"] as Map<string, any?>)["pk"] as string).hexToBytes()
+    try {
+      check("ed25519", test, Ed25519PublicKey(key).verify(hexOf(test, "msg"), hexOf(test, "sig")), true)
+    } catch (e : IllegalArgumentException) {
+      check("ed25519", test, false, false)
+    }
+  }
+}
+
+fun ecdhFile() {
+  eachTest("ecdh_secp256r1_ecpoint_test.json") { group, test ->
+    try {
+      val d = scalar32(hexOf(test, "private"))
+      if (d == null) { throw IllegalArgumentException("too long") }
+      val got = P256PrivateKey(d!!).agree(P256PublicKey(hexOf(test, "public")))
+      check("ecdh", test, true, got.toHex() == test["shared"])
+    } catch (e : IllegalArgumentException) {
+      check("ecdh", test, false, false)
+    }
+  }
+}
+
+fun ecdsaFile(file : string, format : EcdsaFormat) {
+  eachTest(file) { group, test ->
+    val hash = hashNamed(group["sha"] as string)
+    if (hash == null) {
+      passedOver++
+      return@eachTest
+    }
+    val point = ((group["publicKey"] as Map<string, any?>)["uncompressed"] as string).hexToBytes()
+    try {
+      check(file, test, P256PublicKey(point).verify(hexOf(test, "msg"), hexOf(test, "sig"), hash!!, format), true)
+    } catch (e : IllegalArgumentException) {
+      check(file, test, false, false)
+    }
+  }
+}
+
+fun rsaFile(file : string) {
+  eachTest(file) { group, test ->
+    val hash = hashNamed(group["sha"] as string)
+    val mgf = group["mgfSha"] == null ? hash : hashNamed(group["mgfSha"] as string)
+    if (hash == null or mgf == null) {
+      passedOver++
+      return@eachTest
+    }
+    val key = group["publicKey"] as Map<string, any?>
+    val pss = group["type"] == "RsassaPssVerify"
+    val padding = pss ? RsaPadding.pss(group["sLen"] as int, mgf) : RsaPadding.pkcs1
+    try {
+      val publicKey = RsaPublicKey(hexOf(key, "modulus"), hexOf(key, "publicExponent"))
+      check(file, test, publicKey.verify(hexOf(test, "msg"), hexOf(test, "sig"), hash!!, padding), true)
+    } catch (e : IllegalArgumentException) {
+      check(file, test, false, false)
+    }
+  }
+}
+
+ed25519File()
+rsaFile("rsa_pss_2048_sha256_mgf1_32_test.json")
+if (!quick) {
+  x25519File()
+  ecdhFile()
+  ecdsaFile("ecdsa_secp256r1_sha256_test.json", EcdsaFormat.der)
+  ecdsaFile("ecdsa_secp256r1_sha512_test.json", EcdsaFormat.der)
+  ecdsaFile("ecdsa_secp256r1_sha256_p1363_test.json", EcdsaFormat.raw)
+  rsaFile("rsa_signature_2048_sha256_test.json")
+  rsaFile("rsa_signature_3072_sha256_test.json")
+  rsaFile("rsa_signature_4096_sha512_test.json")
+  rsaFile("rsa_pss_3072_sha256_mgf1_32_test.json")
+  rsaFile("rsa_pss_4096_sha512_mgf1_32_test.json")
+  rsaFile("rsa_pss_misc_test.json")
+}
+print(cases > 0 and wrong == 0 ? "public-key vectors: every case right" : "public-key vectors: $wrong of $cases wrong")
+// expect: public-key vectors: every case right
+if (Program.arguments.contains("counts")) { print(cases, "cases,", passedOver, "passed over (SHA-1)") }

@@ -26,6 +26,16 @@
 
 using namespace ww::crypto;
 
+// The system's secure random numbers, which src/crypto/random.cpp gives ww: here, for RSA's salts and
+// primes only, a stand-in.
+namespace ww {
+bool secureRandomFill(uint8_t* out, size_t size) {
+    static std::mt19937_64 made(7);
+    for (size_t i = 0; i < size; i++) out[i] = static_cast<uint8_t>(made());
+    return true;
+}
+}  // namespace ww
+
 namespace {
 
 std::mt19937_64 chance(20261120);
@@ -126,6 +136,35 @@ int main(int argc, char** argv) {
             h->finish(out);
         }));
         if (pass == 1) continue;  // what follows has no instructions of the processor's
+        // Public keys (part 3): the secret scalar or seed fixed or random.
+        worst = std::max(worst, measure("X25519, the private key", runs / 8, secretKey, [&](size_t i) { x25519(out, keys[i].data(), key); }));
+        worst = std::max(worst, measure("Ed25519 sign, the seed", runs / 16, secretKey, [&](size_t i) { ed25519Sign(out, keys[i].data(), in[0].data(), 32); }));
+        uint8_t point[65];
+        {
+            uint8_t d[32];
+            randomBytes(d, 32);
+            d[0] = 1;
+            p256Public(point, d);
+        }
+        // A P-256 key below n: the fixed class 1 (not 0, which is no key), the random one top-bit clear.
+        auto p256Key = [&](int cls, size_t i) {
+            secretKey(cls, i);
+            if (cls == 0) keys[i][31] = 1;
+            keys[i][0] &= 0x7F;
+        };
+        worst = std::max(worst, measure("P-256 ECDH, the private key", runs / 32, p256Key, [&](size_t i) { p256Ecdh(out, keys[i].data(), point); }));
+        std::unique_ptr<Hash> sha = newHash(HashKind::Sha256);
+        worst = std::max(worst, measure("P-256 ECDSA sign, the private key", runs / 32, p256Key,
+                                        [&](size_t i) { p256Sign(out, out + 32, keys[i].data(), in[0].data(), 32, *sha); }));
+        static RsaKey rsaKey;
+        static bool made = false;
+        std::string why;
+        if (!made) made = rsaGenerate(2048, 65537, rsaKey, why);
+        worst = std::max(worst, measure("RSA-2048 sign (PKCS#1, CRT), the message", runs / 400, data, [&](size_t i) {
+            std::vector<uint8_t> signature;
+            std::string failure;
+            rsaSign(rsaKey, HashKind::Sha256, in[i].data(), 64, false, 0, HashKind::Sha256, signature, failure);
+        }));
         worst = std::max(worst, measure("ChaCha20-Poly1305 seal of 64 bytes, the key", runs / 4, secretKey, [&](size_t i) {
             std::unique_ptr<Aead> c = newChaCha20Poly1305(keys[i].data(), 32);
             c->seal(nonce, 12, nullptr, 0, in[0].data(), 64, out, tag);

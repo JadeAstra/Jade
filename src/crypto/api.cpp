@@ -87,6 +87,14 @@ std::unique_ptr<Hash> hashFor(VM& vm, const Value& kindValue, const Value& sizeV
     return newHash(kind, static_cast<size_t>(size));
 }
 
+// Bytes of exactly `size`: a key or point of a fixed size.
+Span exactly(VM& vm, const Value& v, size_t size, const char* what) {
+    const Span s = wholeOf(vm, v, what);
+    if (s.data == nullptr || s.size != size)
+        throw vm.runtimeError(Thrown::IllegalArgumentException, std::string(what) + " is " + std::to_string(size) + " bytes, not " + std::to_string(s.size));
+    return s;
+}
+
 // Where `count` bytes go: `into` from `at`, checked to fit, and not frozen.
 uint8_t* destination(VM& vm, const Value& into, const Value& atValue, size_t count) {
     ObjBytes* b = bytesOf(vm, into, "where it goes");
@@ -327,6 +335,146 @@ void registerCrypto(VM& vm) {
             throw vm.runtimeError(Thrown::IllegalArgumentException, "opened bytes go in the same place as the sealed ones, or apart from them, not overlapping");
         const bool authentic = box.aead->open(nonce.data, nonce.size, aad.data, aad.size, in.data, textSize, in.data + textSize, out);
         return Value::integer(authentic ? static_cast<int64_t>(textSize) : -1);
+    });
+
+    // ---- Public keys (networking plan, part 3) ----
+
+    // x25519(scalar, u): the shared secret, or null where it is all zeros.
+    def("x25519", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const Span k = exactly(vm, args[0], 32, "an X25519 private key"), u = exactly(vm, args[1], 32, "an X25519 public key");
+        uint8_t out[32];
+        if (!x25519(out, k.data, u.data)) return Value::null();
+        const Value made = newBytes(vm, out, 32);
+        wipe(out, 32);
+        return made;
+    });
+    def("x25519Public", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const Span k = exactly(vm, args[0], 32, "an X25519 private key");
+        uint8_t out[32];
+        x25519Public(out, k.data);
+        return newBytes(vm, out, 32);
+    });
+    def("ed25519Public", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const Span seed = exactly(vm, args[0], 32, "an Ed25519 private key");
+        uint8_t out[32];
+        ed25519Public(out, seed.data);
+        return newBytes(vm, out, 32);
+    });
+    def("ed25519Sign", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const Span seed = exactly(vm, args[0], 32, "an Ed25519 private key");
+        const Span m = wholeOf(vm, args[1], "a message");
+        uint8_t sig[64];
+        ed25519Sign(sig, seed.data, m.data, m.size);
+        return newBytes(vm, sig, 64);
+    });
+    // ed25519Verify(public, message, signature): false for any size but 32 and 64 too.
+    def("ed25519Verify", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        const Span key = wholeOf(vm, args[0], "a public key"), m = wholeOf(vm, args[1], "a message"), sig = wholeOf(vm, args[2], "a signature");
+        if (key.size != 32 || sig.size != 64) return Value::boolean(false);
+        return Value::boolean(ed25519Verify(key.data, m.data, m.size, sig.data));
+    });
+    // p256Point(bytes): the point as 04 X Y, checked on the curve; null where it is none.
+    def("p256Point", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const Span b = wholeOf(vm, args[0], "a point");
+        uint8_t out[65];
+        if (!p256Point(b.data, b.size, out)) return Value::null();
+        return newBytes(vm, out, 65);
+    });
+    def("p256ValidPrivate", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const Span d = wholeOf(vm, args[0], "a private key");
+        return Value::boolean(d.size == 32 && p256ValidPrivate(d.data));
+    });
+    def("p256Public", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const Span d = exactly(vm, args[0], 32, "a P-256 private key");
+        uint8_t out[65];
+        p256Public(out, d.data);
+        return newBytes(vm, out, 65);
+    });
+    // p256Ecdh(private, point65): the shared x, or null where the result is infinity.
+    def("p256Ecdh", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const Span d = exactly(vm, args[0], 32, "a P-256 private key"), q = exactly(vm, args[1], 65, "a P-256 point");
+        uint8_t out[32];
+        if (!p256Ecdh(out, d.data, q.data)) return Value::null();
+        const Value made = newBytes(vm, out, 32);
+        wipe(out, 32);
+        return made;
+    });
+    // p256Sign(private, hash kind, message): r and s, 64 bytes.
+    def("p256Sign", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        const Span d = exactly(vm, args[0], 32, "a P-256 private key");
+        std::unique_ptr<Hash> h = hashFor(vm, args[1], Value::integer(32));
+        const Span m = wholeOf(vm, args[2], "a message");
+        h->update(m.data, m.size);
+        std::vector<uint8_t> digest(h->size());
+        h->finish(digest.data());
+        uint8_t sig[64];
+        p256Sign(sig, sig + 32, d.data, digest.data(), digest.size(), *h);
+        return newBytes(vm, sig, 64);
+    });
+    // p256Verify(point65, hash kind, message, signature64)
+    def("p256Verify", 4, 4, [](VM& vm, int, Value* args) -> Value {
+        const Span q = wholeOf(vm, args[0], "a point"), m = wholeOf(vm, args[2], "a message"), sig = wholeOf(vm, args[3], "a signature");
+        std::unique_ptr<Hash> h = hashFor(vm, args[1], Value::integer(32));
+        if (q.size != 65 || sig.size != 64) return Value::boolean(false);
+        h->update(m.data, m.size);
+        std::vector<uint8_t> digest(h->size());
+        h->finish(digest.data());
+        return Value::boolean(p256Verify(q.data, digest.data(), digest.size(), sig.data, sig.data + 32));
+    });
+    // rsaGenerate(bits, e): [n, e, d, p, q, dp, dq, qinv], waiting on its thread as a read does.
+    def("rsaGenerate", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const int64_t bits = vm.toInt(args[0], "bits"), e = vm.toInt(args[1], "public exponent");
+        struct Work {
+            RsaKey key;
+            std::string why;
+            bool done = false;
+            ~Work() { wipe(key.d.data(), key.d.size()), wipe(key.p.data(), key.p.size()), wipe(key.q.data(), key.q.size()); }
+        };
+        auto work = std::make_shared<Work>();
+        if (bits < 0 || e < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "an RSA key's bits and exponent are positive");
+        return vm.blocking([work, bits, e] { work->done = rsaGenerate(static_cast<size_t>(bits), static_cast<uint64_t>(e), work->key, work->why); },
+                           [work](VM& vm) -> Value {
+                               if (!work->done) throw vm.runtimeError(Thrown::IllegalArgumentException, work->why);
+                               const RsaKey& k = work->key;
+                               ObjList* list = newList(vm);
+                               TempRoot keep(vm, Value::object(list));
+                               for (const auto* part : {&k.n, &k.e, &k.d, &k.p, &k.q, &k.dp, &k.dq, &k.qinv}) list->values().push_back(newBytes(vm, part->data(), part->size()));
+                               return Value::object(list);
+                           });
+    });
+    // rsaSign([n, e, d, p, q, dp, dq, qinv], hash kind, message, pss, salt length, mgf hash kind)
+    def("rsaSign", 6, 6, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List) || asList(args[0])->size() != 8) throw vm.runtimeError(Thrown::IllegalArgumentException, "not an RSA private key");
+        RsaKey key;
+        std::vector<uint8_t>* parts[8] = {&key.n, &key.e, &key.d, &key.p, &key.q, &key.dp, &key.dq, &key.qinv};
+        for (size_t i = 0; i < 8; i++) {
+            const Value v = vm.listGet(asList(args[0]), i);
+            if (v.isNull()) continue;
+            const Span s = wholeOf(vm, v, "a key's number");
+            parts[i]->assign(s.data, s.data + s.size);
+        }
+        const HashKind kind = kindOf(vm, args[1]);
+        const Span m = wholeOf(vm, args[2], "a message");
+        const bool pss = args[3].truthy();
+        const int64_t saltLen = vm.toInt(args[4], "salt length");
+        const HashKind mgf = kindOf(vm, args[5]);
+        if (saltLen < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a salt is 0 bytes or more");
+        std::vector<uint8_t> signature;
+        std::string why;
+        const bool done = rsaSign(key, kind, m.data, m.size, pss, static_cast<size_t>(saltLen), mgf, signature, why);
+        for (auto* part : parts) wipe(part->data(), part->size());
+        if (!done) throw vm.runtimeError(Thrown::IllegalArgumentException, why);
+        return newBytes(vm, signature.data(), signature.size());
+    });
+    // rsaVerify(n, e, hash kind, message, signature, pss, salt length, mgf hash kind)
+    def("rsaVerify", 8, 8, [](VM& vm, int, Value* args) -> Value {
+        const Span n = wholeOf(vm, args[0], "a modulus"), e = wholeOf(vm, args[1], "an exponent"), m = wholeOf(vm, args[3], "a message"),
+                   sig = wholeOf(vm, args[4], "a signature");
+        const HashKind kind = kindOf(vm, args[2]), mgf = kindOf(vm, args[7]);
+        const int64_t saltLen = vm.toInt(args[6], "salt length");
+        if (saltLen < 0 || n.data == nullptr || e.data == nullptr || sig.data == nullptr) return Value::boolean(false);
+        return Value::boolean(rsaVerify(std::vector<uint8_t>(n.data, n.data + n.size), std::vector<uint8_t>(e.data, e.data + e.size), kind, m.data, m.size,
+                                        std::vector<uint8_t>(sig.data, sig.data + sig.size), args[5].truthy(), static_cast<size_t>(saltLen), mgf));
     });
 
     // ---- What every secret needs ----

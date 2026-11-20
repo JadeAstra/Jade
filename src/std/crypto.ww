@@ -29,4 +29,18 @@ external object __crypto {
   fun instructions() : List<string>
   fun setPortable(on : bool)
   fun portable() : bool
+  fun rsaVerify(n : Bytes, e : Bytes, hash : int, message : Bytes, signature : Bytes, pss : bool, saltLength : int, mgf : int) : bool
+  fun rsaSign(key : List<Bytes?>, hash : int, message : Bytes, pss : bool, saltLength : int, mgf : int) : Bytes
+  fun rsaGenerate(bits : int, e : int) : List<Bytes>
+  fun p256Verify(point : Bytes, hash : int, message : Bytes, signature : Bytes) : bool
+  fun p256Sign(secret : Bytes, hash : int, message : Bytes) : Bytes
+  fun p256Ecdh(secret : Bytes, point : Bytes) : Bytes?
+  fun p256Public(secret : Bytes) : Bytes
+  fun p256ValidPrivate(bytes : Bytes) : bool
+  fun p256Point(bytes : Bytes) : Bytes?
+  fun ed25519Verify(key : Bytes, message : Bytes, signature : Bytes) : bool
+  fun ed25519Sign(seed : Bytes, message : Bytes) : Bytes
+  fun ed25519Public(seed : Bytes) : Bytes
+  fun x25519Public(scalar : Bytes) : Bytes
+  fun x25519(scalar : Bytes, point : Bytes) : Bytes?
 }
