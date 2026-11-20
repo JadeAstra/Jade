@@ -1163,6 +1163,10 @@ CASE(GetSuper) {
     Value super = *--sp_;
     CHECK_ACCESS(sp_[-1], 1, false, true);
     const Value* method = superMethod(super, sp_[-1], name);
+    if (method == nullptr && super.isObjType(ObjType::Class)) {
+        SAVE_IP();
+        if (ObjString* other = missedName(asClass(super), name, sp_[-1], false)) method = superMethod(super, sp_[-1], other);  // o-private-shadow
+    }
     if (method == nullptr && super.isNull())
         throw runtimeError(Thrown::UnsupportedOperationException, "there is no '" + name->utf8() + "' for super to mean: this class has no superclass, " +
                            std::string("and its interfaces come with none"));
@@ -1680,6 +1684,10 @@ CASES(SuperInvoke, SuperInvokeTrailing) {
     Value super = *--sp_;
     CHECK_ACCESS(sp_[-argc - 1], 1, false, true);
     const Value* method = superMethod(super, sp_[-argc - 1], name);
+    if (method == nullptr && super.isObjType(ObjType::Class)) {
+        SAVE_IP();
+        if (ObjString* other = missedName(asClass(super), name, sp_[-argc - 1], false)) method = superMethod(super, sp_[-argc - 1], other);  // o-private-shadow
+    }
     if (method == nullptr && super.isNull())
         throw runtimeError(Thrown::UnsupportedOperationException, "there is no '" + name->utf8() + "' for super to mean: this class has no superclass, " +
                            std::string("and its interfaces come with none"));

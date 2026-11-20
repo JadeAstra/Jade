@@ -89,7 +89,7 @@ State& state() {
 // nothing is copied (8.9f). `count` is how many the picture they go to has.
 const uint8_t* gridPixels(VM& vm, Value grid, size_t count) {
     Value cells;
-    if (!grid.isObjType(ObjType::Instance) || !asInstance(grid)->read(vm.intern("cells"), cells) || !cells.isObjType(ObjType::List))
+    if (!grid.isObjType(ObjType::Instance) || !asInstance(grid)->readText(vm.intern("cells"), cells) || !cells.isObjType(ObjType::List))
         throw vm.runtimeError(Thrown::ClassCastException, "expected an image's pixels");
     ObjList* list = asList(cells);
     if (!list->packed() || list->pack->width != 4 || list->pack->count != count)

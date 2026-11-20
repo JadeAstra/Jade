@@ -447,7 +447,7 @@ struct Dealt {
 bool isCanvasPart(VM& vm, ObjClass* canvasClass, const Obj* obj) {
     if (canvasClass == nullptr || obj->type != ObjType::Instance || static_cast<const ObjInstance*>(obj)->cls != canvasClass) return false;
     Value part;
-    return static_cast<const ObjInstance*>(obj)->read(vm.intern("part"), part) && part.isInt() && part.as.i != 0;
+    return static_cast<const ObjInstance*>(obj)->readText(vm.intern("part"), part) && part.isInt() && part.as.i != 0;
 }
 
 // A part of a split canvas handed to a piece (G64). It has to be of its image's latest split,
@@ -459,11 +459,11 @@ bool isCanvasPart(VM& vm, ObjClass* canvasClass, const Obj* obj) {
 // draw nothing (mayDraw says why). In a section inside a section, the part was dealt already.
 void dealCanvasPart(VM& vm, ObjInstance* canvas, Dealt& dealt, std::vector<const Obj*>& marked) {
     Value part, image, pixels, splits;
-    if (!canvas->read(vm.intern("part"), part) || !canvas->read(vm.intern("image"), image) || !canvas->read(vm.intern("pixels"), pixels) ||
+    if (!canvas->readText(vm.intern("part"), part) || !canvas->readText(vm.intern("image"), image) || !canvas->readText(vm.intern("pixels"), pixels) ||
         !image.isObjType(ObjType::Instance) || !pixels.isObj())
         return;
     ObjInstance* img = asInstance(image);
-    if (!img->read(vm.intern("splits"), splits) || !splits.isInt()) return;
+    if (!img->readText(vm.intern("splits"), splits) || !splits.isInt()) return;
     if (splits.as.i != part.as.i)
         throw vm.runtimeError(Thrown::IllegalStateException, "a part of an earlier split of an image's canvas is handed out: only the parts of its latest split draw on it together");
     Obj* list = pixels.as.obj;
@@ -476,18 +476,18 @@ void dealCanvasPart(VM& vm, ObjInstance* canvas, Dealt& dealt, std::vector<const
     }
     auto get = [&](ObjInstance* from, const char* name) {
         Value v;
-        return from->read(vm.intern(name), v) && v.isInt() ? v.as.i : 0;
+        return from->readText(vm.intern(name), v) && v.isInt() ? v.as.i : 0;
     };
     const int64_t l = std::max<int64_t>(0, get(canvas, "clipLeft")), t = std::max<int64_t>(0, get(canvas, "clipTop"));
     const int64_t r = std::min(get(img, "width"), get(canvas, "clipRight")), b = std::min(get(img, "height"), get(canvas, "clipBottom"));
     if (r <= l || b <= t) return;
     const int64_t cl = get(img, "changedLeft"), ct = get(img, "changedTop"), cr = get(img, "changedRight"), cb = get(img, "changedBottom");
     const bool none = cr <= cl || cb <= ct;
-    img->setField(vm.intern("changedLeft"), Value::integer(none ? l : std::min(cl, l)));
-    img->setField(vm.intern("changedTop"), Value::integer(none ? t : std::min(ct, t)));
-    img->setField(vm.intern("changedRight"), Value::integer(none ? r : std::max(cr, r)));
-    img->setField(vm.intern("changedBottom"), Value::integer(none ? b : std::max(cb, b)));
-    img->setField(vm.intern("changes"), Value::integer(get(img, "changes") + 1));
+    img->setFieldText(vm.intern("changedLeft"), Value::integer(none ? l : std::min(cl, l)));
+    img->setFieldText(vm.intern("changedTop"), Value::integer(none ? t : std::min(ct, t)));
+    img->setFieldText(vm.intern("changedRight"), Value::integer(none ? r : std::max(cr, r)));
+    img->setFieldText(vm.intern("changedBottom"), Value::integer(none ? b : std::max(cb, b)));
+    img->setFieldText(vm.intern("changes"), Value::integer(get(img, "changes") + 1));
 }
 
 }  // namespace
@@ -505,11 +505,11 @@ namespace {
 // marked by the section outside.
 void dealView(VM& vm, const ParallelSection& section, ObjInstance* view, Dealt& dealt) {
     Value lent, ended, list;
-    if (view->read(vm.intern("lent"), lent) && lent.truthy())
+    if (view->readText(vm.intern("lent"), lent) && lent.truthy())
         throw vm.runtimeError(Thrown::IllegalStateException, "this view has been split: its halves are given out in its place until splitAt's block ends");
-    if (view->read(vm.intern("ended"), ended) && ended.truthy())
+    if (view->readText(vm.intern("ended"), ended) && ended.truthy())
         throw vm.runtimeError(Thrown::IllegalStateException, "this view's splitAt has ended: a view is given out inside the block it was handed to");
-    if (!view->read(vm.intern("list"), list) || !list.isObj()) return;
+    if (!view->readText(vm.intern("list"), list) || !list.isObj()) return;
     Obj* items = list.as.obj;
     if (items->core == kViewedInParts) return;
     if (items->core == vm.coreId() && items->frozen == 0) {
@@ -1036,15 +1036,15 @@ ViewParts viewOf(VM& vm, const Value& v) {
     ViewParts parts;
     parts.view = asInstance(v);
     Value list, start, size, lent;
-    if (!parts.view->read(vm.intern("list"), list) || !parts.view->read(vm.intern("start"), start) || !parts.view->read(vm.intern("size"), size) ||
-        !parts.view->read(vm.intern("lent"), lent) || !list.isObjType(ObjType::List))
+    if (!parts.view->readText(vm.intern("list"), list) || !parts.view->readText(vm.intern("start"), start) || !parts.view->readText(vm.intern("size"), size) ||
+        !parts.view->readText(vm.intern("lent"), lent) || !list.isObjType(ObjType::List))
         throw vm.runtimeError(Thrown::InternalError, "a ListView is needed");
     parts.list = asList(list);
     parts.start = static_cast<size_t>(start.as.i);
     parts.size = static_cast<size_t>(size.as.i);
     parts.lent = lent.truthy();
     Value ended;
-    parts.ended = parts.view->read(vm.intern("ended"), ended) && ended.truthy();
+    parts.ended = parts.view->readText(vm.intern("ended"), ended) && ended.truthy();
     if (parts.start + parts.size > parts.list->size())
         throw vm.runtimeError(Thrown::ConcurrentModificationException, "the list a view is of has become shorter than the view");
     return parts;

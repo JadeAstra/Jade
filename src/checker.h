@@ -191,6 +191,9 @@ public:
     // The forms of a method name a class has, its own and those it inherits, by their roots;
     // empty where the name has one form.
     std::vector<const FunctionDecl*> formRoots(const ClassStmt& cls, const std::string& name);
+    // The private member a member of `cls` written override takes the place of: the file key, a tab
+    // and the name of the class that declared it (o-private-shadow); empty for any other.
+    std::string overriddenPrivate(const ClassStmt& cls, const std::string& name);
 
     // For a fun in an extend (D186): the interface's method it is, by whose form it is known
     // when the program runs. Null where it is none of them.

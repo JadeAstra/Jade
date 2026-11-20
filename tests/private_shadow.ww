@@ -1,0 +1,154 @@
+// A class's private members are its own (o-private-shadow): a subclass may have a member of the
+// same name, which needs no override and is another member, and the class's own code still
+// reaches its own. Kept under a name of the class's own as the program runs (VM::privateName).
+
+// A private field, and a method of that name below.
+abstract class Counter {
+  private var at = 0
+  fun bump() { at += 1 }
+  fun seen() : int => at
+}
+class Scaled : Counter {
+  fun at(i : int) : int => i * 10
+}
+val s = Scaled()
+s.bump()
+s.bump()
+print("${s.seen()} ${s.at(3)}")
+// expect: 2 30
+
+// A private method, and one of the same form below: each class's code calls its own.
+abstract class Named {
+  private fun name() : string => "Named"
+  fun ask() : string => name()
+}
+class Tagged : Named {
+  fun name() : string => "Tagged"
+  fun both() : string => "${ask()}/${name()}"
+}
+print(Tagged().both())
+// expect: Named/Tagged
+
+// A private field, and a field of the same name below, of another type.
+abstract class Holder {
+  private var count = 1
+  fun add() { count += 1 }
+  fun ask() : int => count
+}
+class Labelled : Holder {
+  var count = "mine"
+}
+val l = Labelled()
+l.add()
+l.count = l.count + "!"
+print("${l.ask()} ${l.count}")
+// expect: 2 mine!
+
+// A private property with accessors, and a field of its name below.
+abstract class Gauge {
+  private var level : int = 0
+    get() => field
+    set(v) { field = Math.max(0, v) }
+  fun set(v : int) { level = v }
+  fun read() : int => level
+}
+class Dial : Gauge {
+  val level = "dial"
+}
+val d = Dial()
+d.set(-5)
+d.set(7)
+print("${d.read()} ${d.level}")
+// expect: 7 dial
+
+// Reached through another object of the class, and through `this` in a lambda.
+class Account(private val balance : int) {
+  fun richer(other : Account) : bool => balance > other.balance
+  fun doubled() : int {
+    val twice = { balance * 2 }
+    return twice()
+  }
+}
+print("${Account(5).richer(Account(3))} ${Account(4).doubled()}")
+// expect: true 8
+
+// A data class with a private field in its header: toString, ==, copy and hashCode; JSON leaves
+// it out, as it leaves out what the code writing it may not use.
+data Secret(val id : int, private val code : string = "none") {
+  fun reveal() : string => code
+}
+val a = Secret(1, "x")
+print(a)
+print("${a == Secret(1, "x")} ${a == Secret(1, "y")} ${a.hashCode() == Secret(1, "x").hashCode()}")
+print(a.copy(id = 2).reveal())
+print(Json.write(a))
+print(Json.read<Secret>("{\"id\": 3, \"code\": \"z\"}").reveal())
+// expect: Secret(id=1, code="x")
+// expect: true false true
+// expect: x
+// expect: {"id": 1}
+// expect: none
+
+// A small method reading a private field, put in place in another class's code; and an inline
+// one written so.
+class Box(private val v : int) {
+  fun get() : int => v
+  inline fun <R> with(block : (int) -> R) : R => block(v)
+}
+class Shelf : Box {
+  val v = "shelf's own"
+  fun init() { super.init(41) }
+}
+class User {
+  fun total(b : Box) : int => b.get() + b.with { it + 1 }
+}
+print("${User().total(Box(10))} ${User().total(Shelf())} ${Shelf().v}")
+// expect: 21 83 shelf's own
+
+// An outsider is still told it is private, by the checker and as the program runs.
+class Vault(private val gold : int)
+val vault = Vault(9)
+fun tell(block : () -> unit) {
+  try { block() } catch (e) { print(e.message) }
+}
+print(vault#.field("gold") != null)
+var seen = 0
+tell { vault.apply { seen = gold } }
+// expect: false
+// expect: 'gold' is private in class Vault: only code written in that class can use it
+
+// Written override, a member takes the private one's place: the class above calls it.
+abstract class Shape {
+  private fun area() : int => 0
+  private val kind = "shape"
+  fun describe() : string => "$kind of area ${area()}"
+}
+class Square(val side : int) : Shape {
+  override fun area() : int => side * side
+  private override val kind = "square"
+  fun base() : int => super.area()
+}
+class Plain : Shape {
+  fun area() : int => -1       // not override: its own, which Shape does not call
+}
+print("${Square(3).describe()} ${Square(3).area()} ${Square(3).base()}")
+print("${Plain().describe()} ${Plain().area()}")
+// expect: square of area 9 9 0
+// expect: shape of area 0 -1
+
+// Reflection by the class's own code: its private fields read and set.
+class Person(private var secret : string) {
+  fun fieldNames() : List<string> => Person#.fields.map { it.name }
+  fun readSecret() : any? => Person#.field("secret")?.get(this)
+  fun setSecret(v : string) { Person#.field("secret")?.set(this, v) }
+  fun say() : string => secret
+}
+val p = Person("hidden")
+p.setSecret("told")
+print("${p.fieldNames()} ${p.readSecret()} ${p.say()}")
+// expect: ["secret"] told told
+
+// `override` on a member whose only one above is private: nothing to replace, for the checker
+// (tests/check_errors) and as the class is made.
+print("done")
+// expect: done

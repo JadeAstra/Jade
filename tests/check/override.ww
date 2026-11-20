@@ -122,3 +122,19 @@ abstract class Shown<S> { abstract fun show(s : S) : string }
 interface Updated<S> { fun update(spec : S) }
 class ShowsInt : Shown<int>() { fun show(s : int) : string => "$s" }      // check: 'show' in class ShowsInt is what abstract class Shown asks for; write override in front of it
 class UpdatesText : Updated<string> { override fun update(spec : int) {} } // check: 'update' is written override, but no form above has its parameters (Updated.update(spec : S)); give it those, or make it a form of its own without override
+
+// A private member above (o-private-shadow): one of that name below written without override is
+// its own, and needs none; written with it, it takes the private one's place. Not reported.
+class Keeps {
+  private var count = 0
+  private fun tally() : int => count
+  fun total() : int => tally()
+}
+class KeepsOwn : Keeps {
+  val count = "own"
+  fun tally() : string => "own"
+}
+class KeepsOver : Keeps {
+  override fun tally() : int => 5
+  private override var count = 2
+}

@@ -281,7 +281,7 @@ struct Ways final : HandleWays {
         // What stands here for the other side's own goes home as that.
         if (const ObjClass* cls = classOf(v); cls != nullptr && v.isObjType(ObjType::Instance) && cls->name->utf8().rfind("__ScriptProxy_", 0) == 0) {
             Value inner;
-            if (asInstance(v)->read(vm.intern("__handle"), inner) && inner.isObjType(ObjType::Resource) &&
+            if (asInstance(v)->readText(vm.intern("__handle"), inner) && inner.isObjType(ObjType::Resource) &&
                 std::strcmp(static_cast<ObjResource*>(inner.as.obj)->kind, "script handle") == 0) {
                 const Handle& h = *reinterpret_cast<Handle*>(static_cast<ObjResource*>(inner.as.obj)->id);
                 if (h.run.lock() == run && h.owner != me) {

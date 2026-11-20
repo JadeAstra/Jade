@@ -215,7 +215,7 @@ Temperature.fromFahrenheit(212.0).celsius    // 100.0</pre></dd>
 }</pre></dd>
 
 <dt><code>private</code>, <code>protected</code>, <code>internal</code>, <code>public</code></dt>
-<dd>Who may use a declaration. <code>private</code>: a member only its class's code, a top-level declaration only its file. <code>protected</code>: that, and code written in a subclass, on objects of that subclass. <code>internal</code>: code of the same library (a program is one library; so is Jade). <code>public</code> is accepted and changes nothing: everything else is open to everyone.</dd>
+<dd>Who may use a declaration. <code>private</code>: a member only its class's code, a top-level declaration only its file. A private member is its class's own: a subclass may have a member of the same name, which needs no <code>override</code> and is a member of its own; written <code>override</code> (or <code>private override</code>), it takes the private one's place, and the class above calls it. <code>protected</code>: that, and code written in a subclass, on objects of that subclass. <code>internal</code>: code of the same library (a program is one library; so is Jade). <code>public</code> is accepted and changes nothing: everything else is open to everyone.</dd>
 
 <dt><code>lateinit</code></dt>
 <dd>A <code>var</code> field given its value after the object is made. Reading it before that is an error.</dd>

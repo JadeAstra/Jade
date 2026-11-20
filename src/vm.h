@@ -684,6 +684,34 @@ public:
 
     ObjString* intern(std::string_view s);
 
+    // The name a class's private member is kept under (2026-11-20, o-private-shadow): text as
+    // `text` is, but another object than the interned name, so that a subclass's member of that
+    // name, or another class's private one, is kept apart from it. `owner` is the class's file
+    // and name, as the compiler and the checker write them (its file key, a tab, `Outer.Inner`):
+    // the same owner and text give the same object, in each unit and the cache.
+    ObjString* privateName(std::string_view owner, std::string_view text);
+    // The owner of a private name, or null for any other string (of any VM: the cache writes
+    // them with no VM at hand).
+    static const std::string* privateOwner(const ObjString* name);
+    // The name a private name is the private form of: its text, interned.
+    ObjString* publicName(const ObjString* name) {
+        return privateOwner(name) != nullptr ? intern(std::string_view(name->utf8())) : const_cast<ObjString*>(name);
+    }
+
+    // Where a member `name` of `target` (an object of `cls`) is not found (o-private-shadow): the
+    // other name to look for once, or null. A private name is looked for by its text: the code of
+    // a class reaching, through `this` of a lambda run on another object, what that object has.
+    // A name of text is looked for as a private one of the class's: code put in place from a
+    // kept unit, whose bodies were not checked, reaching another object of its own class; and
+    // code that may not, which is then told it is private (accessError).
+    ObjString* missedName(const ObjClass* cls, ObjString* name, Value target, bool write);
+    // A private name of the class's that reads as `name`, its own or one it inherits; null where
+    // it has none (at once for a text no class has a private name of: ObjString::restricted 16).
+    ObjString* privateLike(const ObjClass* cls, const ObjString* name) const;
+    // For memberGet and memberSet, C++ asking by a text whoever may use it: the class's private name
+    // of it where the object has nothing else of that text.
+    ObjString* trustedName(Value obj, ObjString* name) const;
+
     // ---- Types when the program runs (M6.6 part 1) ----
     // The one object for a type: `id` a TypeId (0 any), for a class `cls`, with its arguments.
     ObjTypeInfo* typeOf(uint8_t id, bool nullable, ObjClass* cls, const std::vector<ObjTypeInfo*>& args);
@@ -1588,6 +1616,8 @@ private:
         }
     };
     std::unordered_map<std::string_view, ObjString*, NameHash> interned_;
+    // Private names (privateName), by owner, a tab and text. Under internMutex_ in the root VM.
+    std::unordered_map<std::string, ObjString*> privateNames_;
     std::unordered_map<std::string, ObjTypeInfo*> types_;  // by what they are made of (typeOf)
     ObjTypeInfo* anyType_ = nullptr;
     ObjTypeInfo* intListType_ = nullptr;

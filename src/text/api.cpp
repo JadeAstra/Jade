@@ -171,8 +171,8 @@ void mayDraw(VM& vm, const ObjInstance* canvas, const Value& pixels) {
     if (list->core == vm.coreId() && list->frozen == 0) return;
     if (list->core == kDrawnInParts && canvas->core == vm.coreId()) {
         Value part, image, splits;
-        if (canvas->read(vm.intern("part"), part) && part.isInt() && part.as.i != 0 && canvas->read(vm.intern("image"), image) &&
-            image.isObjType(ObjType::Instance) && asInstance(image)->read(vm.intern("splits"), splits) && splits.isInt() && splits.as.i == part.as.i)
+        if (canvas->readText(vm.intern("part"), part) && part.isInt() && part.as.i != 0 && canvas->readText(vm.intern("image"), image) &&
+            image.isObjType(ObjType::Instance) && asInstance(image)->readText(vm.intern("splits"), splits) && splits.isInt() && splits.as.i == part.as.i)
             return;
         throw vm.runtimeError(Thrown::IllegalStateException, "this part is from an earlier split of the image: only the parts of its latest split draw on it in a parallel section");
     }
@@ -187,7 +187,7 @@ Target targetOf(VM& vm, Value* args) {
     t.width = static_cast<int>(vm.toInt(args[1], "width"));
     t.height = static_cast<int>(vm.toInt(args[2], "height"));
     Value pixels;
-    if (!args[0].isObjType(ObjType::Instance) || !asInstance(args[0])->read(vm.intern("pixels"), pixels))
+    if (!args[0].isObjType(ObjType::Instance) || !asInstance(args[0])->readText(vm.intern("pixels"), pixels))
         throw vm.runtimeError(Thrown::InternalError, "an ImageCanvas is drawn on");
     if (vm.coreId() != 0) mayDraw(vm, asInstance(args[0]), pixels);
     t.rgba = rgbaOf(vm, pixels, t.width, t.height).data();

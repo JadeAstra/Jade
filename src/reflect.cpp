@@ -224,16 +224,22 @@ void registerReflection(VM& vm) {
         return Value::object(newList(vm, std::move(entries)));
     });
 
+    // The name a Field or a Method lists: a class's private name as it is (o-private-shadow),
+    // any other interned.
+    static const auto memberNameOf = [](VM& vm, Value name, const char* what) -> ObjString* {
+        if (name.isObjType(ObjType::String) && (asString(name)->restricted & 8) != 0) return asString(name);
+        return vm.intern(vm.toStr(name, what));
+    };
     // A member used by its name, whoever may use it: what a Field or a Method listed.
     vm.defineNative("__memberGet", 2, 2, [](VM& vm, int, Value* args) -> Value {
-        return vm.memberGet(args[0], vm.intern(vm.toStr(args[1], "a member's name")));
+        return vm.memberGet(args[0], memberNameOf(vm, args[1], "a member's name"));
     });
     vm.defineNative("__memberSet", 3, 3, [](VM& vm, int, Value* args) -> Value {
-        vm.memberSet(args[0], vm.intern(vm.toStr(args[1], "a member's name")), args[2]);
+        vm.memberSet(args[0], memberNameOf(vm, args[1], "a member's name"), args[2]);
         return Value::null();
     });
     vm.defineNative("__memberCall", 3, 3, [](VM& vm, int, Value* args) -> Value {
-        const Value method = vm.memberGet(args[0], vm.intern(vm.toStr(args[1], "a method's name")));
+        const Value method = vm.memberGet(args[0], memberNameOf(vm, args[1], "a method's name"));
         TempRoot keep(vm, method);
         const std::vector<Value> values = argumentsOf(vm, args[2]);
         return vm.call(method, static_cast<int>(values.size()), values.data());

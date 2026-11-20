@@ -460,7 +460,7 @@ void VM::threadMain(ThreadState* me) {
         bool toJob = false;
         if (me->self.isObjType(ObjType::Instance)) {
             Value whenFailed = Value::null();
-            if (asInstance(me->self)->read(intern("whenFailed"), whenFailed) && !whenFailed.isNull()) {
+            if (asInstance(me->self)->readText(intern("whenFailed"), whenFailed) && !whenFailed.isNull()) {
                 try {
                     call(whenFailed, 1, &thrown.value);
                     toJob = true;

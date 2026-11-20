@@ -2489,30 +2489,74 @@ struct Checker::Impl {
     // The forms of a method name the classes directly above a class have.
     // A field or property of a class or interface above `k`, by name: the class that has it, and
     // whether it only asks for one (an interface's with no getter, an abstract one).
-    ClassInfo* fieldAbove(ClassInfo* k, const std::string& name, bool& asked) {
+    ClassInfo* fieldAbove(ClassInfo* k, const std::string& name, bool& asked, bool skipPrivate = false) {
         resolveSupers(k);
         std::vector<ClassInfo*> supers = k->interfaces;
         if (k->superclass != nullptr) supers.insert(supers.begin(), k->superclass);
         for (ClassInfo* s : supers) {
             if (s->unknownSuper) return nullptr;
             auto found = s->fields.find(name);
+            // Asked whether a member of a class below needs override: a private field above needs
+            // none, as one written without it is a member of its own (o-private-shadow).
+            if (skipPrivate && found != s->fields.end() && found->second->decl != nullptr && found->second->decl->access == kAccessWordPrivate) found = s->fields.end();
             if (found != s->fields.end()) {
                 const VarStmt* d = found->second->decl;
                 asked = d != nullptr && (d->isAbstract || (s->isInterface && d->getter == nullptr && !d->init));
                 return s;
             }
-            if (ClassInfo* higher = fieldAbove(s, name, asked)) return higher;
+            if (ClassInfo* higher = fieldAbove(s, name, asked, skipPrivate)) return higher;
         }
         return nullptr;
     }
 
+    // A private method its class keeps to itself, under a name of its own as the program runs
+    // (the compiler's notePrivates): one of a single form, of a class that is not an enum.
+    bool ownPrivate(const FuncInfo* g) {
+        if (g == nullptr || g->decl == nullptr || g->decl->access != kAccessWordPrivate || g->decl->isStatic || g->owner == nullptr) return false;
+        if (g->owner->isInterface || g->owner->isEnum) return false;
+        return formRoot(*g->decl) == nullptr;
+    }
+
+    // The private member a member of `k` written override takes the place of, the class that
+    // declared it first (private and not override) as classKey names it; empty where what it
+    // replaces is not private. Its class's code, the subclass's and the class's own put in place,
+    // all reach it by that class's private name (o-private-shadow).
+    std::string overriddenPrivate(ClassInfo* k, const std::string& name) {
+        resolveSupers(k);
+        for (ClassInfo* s = k->superclass; s != nullptr; s = s->superclass) {
+            resolveSupers(s);
+            uint8_t access = kAccessWordNone;
+            bool overrides = false, found = false;
+            if (auto f = s->fields.find(name); f != s->fields.end() && f->second->decl != nullptr) {
+                access = f->second->decl->access;
+                overrides = f->second->decl->isOverride;
+                found = true;
+            } else if (auto m = s->methods.find(name); m != s->methods.end() && m->second.size() == 1 && m->second[0]->decl != nullptr) {
+                if (!ownPrivate(m->second[0]) && m->second[0]->decl->access == kAccessWordPrivate) return {};
+                access = m->second[0]->decl->access;
+                overrides = m->second[0]->decl->isOverride;
+                found = true;
+            } else if (m != s->methods.end()) {
+                return {};
+            }
+            if (!found) continue;
+            if (access == kAccessWordPrivate && !overrides) return s->isEnum || s->isInterface || s->isValue ? std::string() : classKey(s);
+            if (!overrides) return {};
+        }
+        return {};
+    }
+
     void overridesMarked(const ClassStmt& c, ClassInfo* k) {
-        auto who = [](const ClassInfo* owner) { return std::string(owner->isInterface ? "interface " : "abstract class ") + owner->name; };
+        auto who =[](const ClassInfo* owner) { return std::string(owner->isInterface ? "interface " : "abstract class ") + owner->name; };
         for (const auto& m : c.methods) {
             if (m->isStatic || m->generated || m->accessor != FunctionDecl::Accessor::None || m->name == "init") continue;
             auto known = funcOf.find(m.get());
             if (known == funcOf.end()) continue;
-            const std::vector<FuncInfo*> above = formsAbove(k, m->name);
+            std::vector<FuncInfo*> above = formsAbove(k, m->name);
+            // A private method of one form above needs no override: one written without it is a
+            // method of its own (o-private-shadow). Written with it, it takes the private one's place.
+            if (!m->isOverride)
+                above.erase(std::remove_if(above.begin(), above.end(), [&](FuncInfo* g) { return ownPrivate(g); }), above.end());
             if (m->isOverride) {
                 if (above.empty() && m->name != "toString" && m->name != "==")
                     report(*m, "'" + m->name + "' in class " + k->name + " is marked override, but there is nothing of that name for it to replace");
@@ -2538,7 +2582,7 @@ struct Checker::Impl {
             // to it: the same fields, not ones in their place (D65).
             if (i < c.headerFieldCount && k->isData && k->superclass != nullptr && k->superclass->isData) continue;
             bool asked = false;
-            ClassInfo* owner = fieldAbove(k, f->name, asked);
+            ClassInfo* owner = fieldAbove(k, f->name, asked, !f->isOverride);
             if (f->isOverride && owner == nullptr)
                 report(*f, "'" + f->name + "' in class " + k->name + " is marked override, but there is nothing of that name for it to replace");
             else if (!f->isOverride && owner != nullptr)
@@ -12959,6 +13003,11 @@ void Checker::run() {
     impl_->reportPrelude = reportStandardLibrary;
     impl_->requireTypes = requireTypes;
     impl_->runAll();
+}
+
+std::string Checker::overriddenPrivate(const ClassStmt& cls, const std::string& name) {
+    auto found = impl_->classOf.find(&cls);
+    return found == impl_->classOf.end() ? std::string() : impl_->overriddenPrivate(found->second, name);
 }
 
 }  // namespace ww

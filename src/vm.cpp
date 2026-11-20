@@ -376,13 +376,25 @@ ObjClass* VM::classInGlobal(int slot) const {
     return asClass(globals_[static_cast<size_t>(slot)]);
 }
 
+// The member of `name`'s text the C++ means, for memberGet and memberSet, whoever may use it: a
+// class's private one where the object has nothing else of that text (o-private-shadow).
+ObjString* VM::trustedName(Value obj, ObjString* name) const {
+    if ((name->restricted & 16) == 0 || (name->restricted & 8) != 0) return name;
+    const ObjClass* cls = classOf(obj);
+    if (cls == nullptr || hasMember(obj, name)) return name;
+    ObjString* own = privateLike(cls, name);
+    return own != nullptr ? own : name;
+}
+
 Value VM::memberGet(Value obj, ObjString* name) {
+    name = trustedName(obj, name);
     if (const ObjClass* cls = classOf(obj); cls != nullptr && cls->hasAccessors)
         if (const Value* getter = cls->getters.find(name)) return callWithReceiver(obj, asClosure(*getter));
     return getProperty(obj, name);
 }
 
 void VM::memberSet(Value obj, ObjString* name, Value value) {
+    name = trustedName(obj, name);
     if (const ObjClass* cls = classOf(obj); cls != nullptr && cls->hasAccessors) {
         if (const Value* setter = cls->setters.find(name)) {
             const Value bound = Value::object(alloc<ObjBoundMethod>(obj, asClosure(*setter)));
@@ -914,6 +926,73 @@ ObjString* VM::intern(std::string_view s) {
     return str;
 }
 
+namespace {
+// Each private name's owner, for every VM (a VM's private names are freed with it, and their
+// places taken again: hence assigned, not added, and asked only of a name marked private).
+std::mutex privateOwnersMutex;
+std::unordered_map<const ObjString*, std::string> privateOwners;
+}  // namespace
+
+ObjString* VM::privateName(std::string_view owner, std::string_view text) {
+    VM& root = root_ != nullptr ? *root_ : *this;
+    std::lock_guard<std::mutex> hold(root.internMutex_);
+    std::string key;
+    key.reserve(owner.size() + 1 + text.size());
+    key.append(owner).append(1, '\t').append(text);
+    auto it = root.privateNames_.find(key);
+    if (it != root.privateNames_.end()) return it->second;
+    ObjString* str = root.alloc<ObjString>(std::string(text));
+    str->immortal = true;
+    str->restricted |= 8;
+    // The text, interned, is marked too: a name some class has a private one of (privateLike).
+    root.intern(text)->restricted |= 16;
+    root.privateNames_.emplace(std::move(key), str);
+    std::lock_guard<std::mutex> owners(privateOwnersMutex);
+    privateOwners[str] = std::string(owner);
+    return str;
+}
+
+const std::string* VM::privateOwner(const ObjString* name) {
+    if ((name->restricted & 8) == 0) return nullptr;
+    std::lock_guard<std::mutex> hold(privateOwnersMutex);
+    auto it = privateOwners.find(name);
+    return it != privateOwners.end() ? &it->second : nullptr;
+}
+
+ObjString* VM::privateLike(const ObjClass* cls, const ObjString* name) const {
+    if (cls == nullptr || (name->restricted & 16) == 0) return nullptr;
+    // Among its fields, methods and properties, inherited ones with them.
+    ObjString* found = nullptr;
+    auto scan = [&](const Table& table) {
+        for (uint32_t at = 0; found == nullptr && at < table.capacity(); at++) {
+            ObjString* key = table.entries()[at].key;
+            if (key != nullptr && (key->restricted & 8) != 0 && sameText(key, name)) found = key;
+        }
+    };
+    scan(cls->declaredIndex);
+    scan(cls->methods);
+    scan(cls->getters);
+    scan(cls->setters);
+    return found;
+}
+
+ObjString* VM::missedName(const ObjClass* cls, ObjString* name, Value target, bool write) {
+    if (cls == nullptr) return nullptr;
+    if ((name->restricted & 8) != 0) return publicName(name);
+    ObjString* const found = privateLike(cls, name);
+    if (found == nullptr) return nullptr;
+    // What may use it says the code running: of its class, or put in place from it (whose
+    // rights are noted by where it is, and are asked of the instruction last run).
+    if (frameCount_ > 0) {
+        const CallFrame& frame = frames_[frameCount_ - 1];
+        const FunctionProto* proto = frame.closure->proto;
+        if (accessDenied(target, found, proto, write) &&
+            (proto->rights.empty() || frame.ip == nullptr || !rightsAllow(target, found, proto, frame.ip, write)))
+            throw accessError(target, found, proto);
+    }
+    return found;
+}
+
 ObjString* VM::newString(std::string s) {
     account(s.size());
     return alloc<ObjString>(std::move(s));
@@ -998,7 +1077,7 @@ bool VM::builtinTypeNamed(const std::string& name, BuiltinType& type) {
 std::vector<Value> VM::setAsideOf(Value error) {
     std::vector<Value> out;
     if (!error.isObjType(ObjType::Instance)) return out;
-    const Value* kept = asInstance(error)->field(intern("setAside"));
+    const Value* kept = asInstance(error)->fieldText(intern("setAside"));
     if (kept != nullptr && kept->isObjType(ObjType::List)) collect(*kept, out);
     return out;
 }
@@ -1614,7 +1693,10 @@ ObjUpvalue* VM::receiverUpvalue(const CallFrame* frame, const Value* base, uint1
 Value VM::implicitReceiver(const CallFrame* frame, const Value* base, const ObjString* name) const {
     const FunctionProto* proto = frame->closure->proto;
     auto has = [&](Value candidate) {
-        return hasMember(candidate, name) && !(name->restricted != 0 && accessDenied(candidate, name, proto, false));
+        if (hasMember(candidate, name)) return !(name->restricted != 0 && accessDenied(candidate, name, proto, false));
+        // A private member of that text the code may use: opened by an override below (o-private-shadow).
+        const ObjString* own = privateLike(classOf(candidate), name);
+        return own != nullptr && !accessDenied(candidate, own, proto, false);
     };
     implicitTried_ = implicitFirstCount_;
     if (implicitFirstCount_ != 0) {
@@ -1652,15 +1734,20 @@ Value VM::implicitReceiver(const CallFrame* frame, const Value* base, const ObjS
 // it is a member of the object the code runs on that the code may not use.
 WwThrow VM::undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global) {
     const FunctionProto* proto = frame->closure->proto;
-    auto kept = [&](Value candidate) { return hasMember(candidate, name) && accessDenied(candidate, name, proto, false); };
+    // The name the member is kept under where the code may not use it (its private one, o-private-shadow), or null.
+    auto kept = [&](Value candidate) -> const ObjString* {
+        if (hasMember(candidate, name)) return accessDenied(candidate, name, proto, false) ? name : nullptr;
+        const ObjString* own = privateLike(classOf(candidate), name);
+        return own != nullptr && accessDenied(candidate, own, proto, false) ? own : nullptr;
+    };
     for (int i = std::exchange(implicitTried_, uint8_t{0}); i-- > 0;)
-        if (kept(implicitFirst_[i])) return accessError(implicitFirst_[i], name, proto);
-    if (kept(base[0])) return accessError(base[0], name, proto);
+        if (const ObjString* k = kept(implicitFirst_[i])) return accessError(implicitFirst_[i], k, proto);
+    if (const ObjString* k = kept(base[0])) return accessError(base[0], k, proto);
     for (uint16_t upvalue : proto->outerReceivers) {
         const ObjUpvalue* cell = receiverUpvalue(frame, base, upvalue);
         if (cell == nullptr) continue;
         Value outer = *cell->location;
-        if (kept(outer)) return accessError(outer, name, proto);
+        if (const ObjString* k = kept(outer)) return accessError(outer, k, proto);
     }
     return undefinedGlobal(program_->globalNames[global]);
 }
@@ -1696,10 +1783,10 @@ WwThrow VM::runtimeError(Thrown kind, const std::string& message) {
         ObjInstance* error = newInstance(cls);
         error->setField(names.message, str(message));
         error->setField(names.cause, Value::null());
-        error->setField(intern("setAside"), Value::null());  // Throwable's errors set aside for it (G40)
+        error->setFieldText(intern("setAside"), Value::null());  // Throwable's errors set aside for it (G40)
         // Where it was made (Throwable.stackTrace): here, as an error made in WinterWolf code keeps
         // its maker's place. Not for running out of memory, which the strings would take more of.
-        error->setField(intern("frames"), kind == Thrown::OutOfMemoryError ? Value::null() : traceList(*this, captureTrace()));
+        error->setFieldText(intern("frames"), kind == Thrown::OutOfMemoryError ? Value::null() : traceList(*this, captureTrace()));
         t.value = Value::object(error);
     }
     return t;
@@ -2687,6 +2774,9 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
                 sp_[-argc - 1] = inner;
                 return trailing ? callValueTrailing(inner, argc) : callValue(inner, argc);
             }
+            if (ObjString* other = missedName(instance->cls, name, receiver, false)) {  // o-private-shadow
+                return invoke(other, argc, trailing);
+            }
             throw runtimeError(Thrown::UnsupportedOperationException, "undefined method '" + name->utf8() + "' on " + instance->cls->name->utf8());
         }
 
@@ -3051,6 +3141,9 @@ Value VM::getProperty(Value obj, ObjString* name) {
                                        "(a lateinit field is read only once it has one)");
                 }
                 if (Value inner; nestedThrough(instance, name, inner)) return inner;  // `Store.Inner` (o-m8-nested)
+                if (ObjString* other = missedName(instance->cls, name, obj, false)) {  // o-private-shadow
+                    return getProperty(obj, other);
+                }
                 throw runtimeError(Thrown::UnsupportedOperationException, "undefined property '" + name->utf8() + "' on " + instance->cls->name->utf8());
             }
             case ObjType::Value: {
@@ -4662,6 +4755,11 @@ void VM::setProperty(Value obj, ObjString* name, Value value) {
             setExtraField(instance, name, own(value));  // a field an extend adds (D157)
             return;
         }
+        if (instance->cls->declaredIndex.find(name) == nullptr && instance->cls->setters.find(name) == nullptr)
+            if (ObjString* other = missedName(instance->cls, name, obj, true)) {  // o-private-shadow
+                setProperty(obj, other, value);
+                return;
+            }
         checkFieldAssignment(instance, name, value);  // every field is declared (R24)
         if (instance->inlined) {
             const FieldDecl* decl = instance->declOf(name);
@@ -7437,7 +7535,9 @@ bool VM::noMemberForRegion(const void* vm, const FunctionProto& f, const ObjStri
     const VM& self = *static_cast<const VM*>(vm);
     if (!f.outerReceivers.empty() || !(receiver.isObjType(ObjType::Instance) || receiver.isObjType(ObjType::Value))) return false;
     try {
-        return !(self.hasMember(receiver, name) && !(name->restricted != 0 && self.accessDenied(receiver, name, &f, false)));
+        if (self.hasMember(receiver, name)) return name->restricted != 0 && self.accessDenied(receiver, name, &f, false);
+        const ObjString* own = self.privateLike(classOf(receiver), name);  // o-private-shadow
+        return own == nullptr || self.accessDenied(receiver, own, &f, false);
     } catch (...) {
         return false;
     }
@@ -8111,7 +8211,13 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
             for (size_t from = 0; from < slotted.size();) {
                 const size_t end = slotted.find('\n', from);
                 if (end == std::string::npos) break;
-                if (const Value* at = cls->declaredIndex.find(intern(std::string_view(slotted).substr(from, end - from))))
+                // A private field's line: , its owner, a tab and its text (o-private-shadow).
+                const std::string_view line = std::string_view(slotted).substr(from, end - from);
+                const size_t tab = line.rfind('	');
+                ObjString* const name = !line.empty() && line[0] == '' && tab != std::string_view::npos
+                                            ? privateName(line.substr(1, tab - 1), line.substr(tab + 1))
+                                            : intern(line);
+                if (const Value* at = cls->declaredIndex.find(name))
                     cls->typeSlotted.push_back(static_cast<uint32_t>(at->as.i));
                 from = end + 1;
             }

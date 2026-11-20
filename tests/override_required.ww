@@ -63,3 +63,19 @@ class Counter { static { var count = 0; fun bump() { count += 1 } } }
 class Sub : Counter { static { fun bump() { Counter.count += 10 } } }
 Sub.bump()
 print(Counter.count)                        // expect: 10
+
+// A private member above (o-private-shadow): one of that name below without override is a member
+// of its own, which the class above does not reach; with it, it takes the private one's place.
+class Keeps {
+  private var count = 1
+  private fun tally() : int => count * 10
+  fun total() : int => tally()
+}
+class KeepsOwn : Keeps {
+  val count = "own"
+  fun tally() : string => "own " + count
+}
+class KeepsOver : Keeps {
+  override fun tally() : int => 5
+}
+print(KeepsOwn().total(), KeepsOwn().tally(), KeepsOver().total())   // expect: 10 own own 5

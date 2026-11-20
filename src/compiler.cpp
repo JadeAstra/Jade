@@ -494,6 +494,11 @@ struct ClassState {
     bool isEnum = false;
     bool isValue = false;  // a value type (M6.6 part 2)
     std::vector<std::string> typeParams{};  // a generic class's, which each of its objects keeps (M6.6 part 1)
+    // Its private members, each kept under a name of the class's own (VM::privateName,
+    // o-private-shadow) so that a subclass's member of that name is another: the names as
+    // written (a property's stored value's too), and the class's file and name they belong to.
+    std::unordered_map<std::string, std::string> privates{};  // each name and the class it is private to
+    std::string privateOwner{};
 
     // Fields whose initial values the generated initializer assigns, after the header's
     // entries, so that such a value can be worked out from them. The value may be null.
@@ -1207,7 +1212,7 @@ private:
     }
 
     // What a member's body sees of its class: its members and statics, as compileClass has them.
-    std::unique_ptr<ClassState> classScopeOf(const ClassStmt& s, const std::string& bound) {
+    std::unique_ptr<ClassState> classScopeOf(const ClassStmt& s, const std::string& bound, const std::string& fileKey) {
         auto cls = std::make_unique<ClassState>(ClassState{nullptr});
         cls->storage = s.isObject ? "(object " + bound + ")" : bound;
         cls->qualified = bound;
@@ -1217,6 +1222,7 @@ private:
         for (const TypeParam& p : s.typeParams) cls->typeParams.push_back(p.name);
         cls->id = classId(s);
         if (!s.isInterface && !s.hasSuper && !s.fields.empty()) cls->closed = &s;
+        notePrivates(*cls, s, fileKey);
         for (const auto& field : s.fields) cls->members.insert(field->name);
         for (const auto& field : s.staticFields) cls->statics.insert(field->name);
         for (const auto& inner : s.nested) cls->statics.insert(inner->name);
@@ -1492,7 +1498,7 @@ private:
         frame.tryDepth = fs_->tryDepth;
         for (size_t p = 0; p < n; p++)
             if (bound[p]) frame.lambdas[fn.params[p]] = *bound[p];
-        if (info.owner != nullptr) frame.cls = classScopeOf(*info.owner, info.ownerName);
+        if (info.owner != nullptr) frame.cls = classScopeOf(*info.owner, info.ownerName, info.fileKey);
         CodeScope body;
         body.fileKey = info.fileKey;
         body.ns = info.prelude ? session_.builtins_ : info.ns != nullptr ? info.ns : ns_;
@@ -2093,6 +2099,66 @@ private:
     int stringConstant(const std::string& s) {
         ObjString* str = session_.vm_.intern(s);
         return addConstant(Value::object(str), 2, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(str)));
+    }
+
+    // ---- Private members (o-private-shadow) ----
+    //
+    // A class's private member is its own: a subclass may have a member of that name, and the
+    // class's code still reaches its own. So each is kept under a name of the class's own
+    // (VM::privateName), which the class's code uses where it reaches its own object: `this`,
+    // bare names, and its methods put in place elsewhere (the class's file and name come with
+    // them). Anywhere else the program asks by the name's text, and the VM finds the private
+    // one where nothing else has it (VM::missedName), judging then who may use it.
+
+    // The members of `s` kept under private names: its private fields and properties, and its
+    // private methods of one form, each under its own class's name; and what it writes override
+    // over a private one above, under the name of the class that declared that (so the class
+    // above, whose code calls it by that name, reaches this one). Not an enum's, an interface's
+    // or a value type's.
+    void notePrivates(ClassState& cls, const ClassStmt& s, const std::string& fileKey) {
+        if (s.isEnum || s.isInterface || s.isValue || s.isExternal) return;
+        cls.privateOwner = fileKey + "\t" + cls.qualified;
+        auto note = [&](bool isPrivate, bool isOverride, const std::string& name, const std::string& stored) {
+            std::string owner;
+            if (isOverride) owner = session_.checker != nullptr ? session_.checker->overriddenPrivate(s, name) : std::string();
+            else if (isPrivate) owner = cls.privateOwner;
+            if (owner.empty()) return;
+            cls.privates[name] = owner;
+            cls.privates[stored] = owner;
+        };
+        for (const auto& field : s.fields)
+            if (!field->isAbstract) note(field->access == kAccessWordPrivate, field->isOverride, field->name, storedName(*field));
+        for (const auto& method : s.methods) {
+            if (method->isStatic || method->isAbstract || method->name == "init" || method->accessor != FunctionDecl::Accessor::None ||
+                formNameOf(s, *method) != method->name)
+                continue;
+            note(method->access == kAccessWordPrivate, method->isOverride, method->name, method->name);
+        }
+    }
+
+    int privateConstant(const std::string& owner, const std::string& text) {
+        ObjString* str = session_.vm_.privateName(owner, text);
+        return addConstant(Value::object(str), 2, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(str)));
+    }
+
+    // The name a member of the class being compiled is kept under, reached on its own object.
+    int ownName(const std::string& name) {
+        if (class_ != nullptr)
+            if (auto it = class_->privates.find(name); it != class_->privates.end()) return privateConstant(it->second, name);
+        return stringConstant(name);
+    }
+    // A member's name in what describes a class (reflection, its fields' types): its private
+    // name where it has one (metaNames_, the class being described).
+    const ClassState* metaNames_ = nullptr;
+    int metaName(const std::string& name) {
+        if (metaNames_ != nullptr)
+            if (auto it = metaNames_->privates.find(name); it != metaNames_->privates.end()) return privateConstant(it->second, name);
+        return stringConstant(name);
+    }
+    // The same for a member reached on `object`: the private name where it is the class's own
+    // object (`this` of a method or of an inline member's body).
+    int memberName(const Expr& object, const std::string& name) {
+        return object.kind == ExprKind::This && classSide() == ClassSide::Instance ? ownName(name) : stringConstant(name);
     }
 
     // ---- Scopes and variables ----
@@ -2755,7 +2821,7 @@ private:
             if (!seen.insert(std::string(isStatic ? "static " : "") + (write ? "set " : "") + name).second) return;
             line_ = line;
             emit(isStatic ? Op::StaticAccess : Op::MemberAccess);
-            emitU16(stringConstant(name));
+            emitU16(isStatic ? stringConstant(name) : ownName(name));
             emitU16(id);
             emitByte(kind | (write ? 0x10 : 0));
         };
@@ -3020,7 +3086,7 @@ private:
         here.line = line_;
         here.col = 1;
         const int slot = resolveGlobal(name, here)->slot;
-        emitImplicitOp(op, stringConstant(name));
+        emitImplicitOp(op, classSide() == ClassSide::Instance ? ownName(name) : stringConstant(name));
         emitU16(slot);
     }
 
@@ -3056,7 +3122,7 @@ private:
             const std::string backing = backingFieldHere(at);
             if (!backing.empty()) {
                 emitGet("this", at);
-                emit(Op::GetProp, stringConstant(backing));
+                emit(Op::GetProp, ownName(backing));
                 return;
             }
         }
@@ -3067,7 +3133,7 @@ private:
                 if (directThis()) {
                     emitThisValue();
                     const bool inPlace = session_.checker != nullptr && !copyReadsHere() && session_.checker->readsFieldInPlace(at);
-                    emit(inPlace ? Op::GetOwnRef : Op::GetOwn, stringConstant(name));
+                    emit(inPlace ? Op::GetOwnRef : Op::GetOwn, ownName(name));
                 } else {
                     emitImplicit(Op::GetImplicit, name);  // in a function inside the method
                 }
@@ -3141,7 +3207,7 @@ private:
             if (!backing.empty()) {
                 emitGet("this", at);
                 emit(Op::Swap);
-                emit(Op::SetProp, stringConstant(backing));
+                emit(Op::SetProp, ownName(backing));
                 return;
             }
         }
@@ -3152,7 +3218,7 @@ private:
                 if (directThis()) {
                     emitThisValue();
                     emit(Op::Swap);
-                    emit(Op::SetOwn, stringConstant(name));
+                    emit(Op::SetOwn, ownName(name));
                 } else {
                     emitImplicit(Op::SetImplicit, name);
                 }
@@ -4979,6 +5045,7 @@ private:
         for (const TypeParam& p : s.typeParams) cls.typeParams.push_back(p.name);
         cls.id = classId(s);
         if (!s.isInterface && !s.hasSuper && !s.fields.empty()) cls.closed = &s;
+        notePrivates(cls, s, fileKey_);
         for (const auto& field : s.fields) cls.members.insert(field->name);
         for (const auto& field : s.staticFields) cls.statics.insert(field->name);
         for (const auto& inner : s.nested) cls.statics.insert(inner->name);
@@ -5098,7 +5165,7 @@ private:
 
         emitGet(storage, s);
         if (s.isData) {
-            for (const HeaderParam& param : s.header) emit(Op::DataField, stringConstant(param.name));
+            for (const HeaderParam& param : s.header) emit(Op::DataField, ownName(param.name));
             if (s.header.empty()) emit(Op::DataField, stringConstant(""));  // an annotation with no values: Marked()
         }
         // Its objects can change in what == sees, so they are no keys (D26).
@@ -5201,7 +5268,7 @@ private:
                                 : FunctionKind::Method;
             compileFunction(*method, kind, s.name + "." + method->name);
             if (runtimeName != method->name) markForm(*fs_->proto->protos.back(), *method);
-            emit(method->isStatic ? Op::StaticMethod : Op::Method, stringConstant(runtimeName));
+            emit(method->isStatic ? Op::StaticMethod : Op::Method, method->isStatic ? stringConstant(runtimeName) : ownName(runtimeName));
         }
         // A name with several forms: the class's set of them goes under the name, the forms it
         // declares and those it inherits.
@@ -5255,12 +5322,12 @@ private:
             nextProperty_ = field->name;
             nextBackingField_ = backing;
             compileFunction(*field->getter, FunctionKind::Method, s.name + "." + field->name);
-            emit(Op::Getter, stringConstant(field->name));
+            emit(Op::Getter, ownName(field->name));
             if (field->setter) {
                 nextProperty_ = field->name;
                 nextBackingField_ = backing;
                 compileFunction(*field->setter, FunctionKind::Setter, s.name + "." + field->name);
-                emit(Op::Setter, stringConstant(field->name));
+                emit(Op::Setter, ownName(field->name));
             }
         }
         emitMemberAccess(s, cls);
@@ -5422,7 +5489,7 @@ private:
         // What every enum is given is replaced under rules of its own (checkEnumMembers).
         if (s.isEnum && (name == "name" || name == "ordinal" || name == "entries")) return;
         emit(Op::CheckOverride);
-        emitU16(stringConstant(name));
+        emitU16(ownName(name));
         emitByte((marked ? 1 : 0) | (property ? 2 : 0));
     }
 
@@ -5612,7 +5679,7 @@ private:
             line_ = param.line;
             emit(Op::GetLocal, 0);
             emit(Op::GetLocal, static_cast<int>(i + 1));
-            emit(Op::SetOwn, stringConstant(param.name));
+            emit(Op::SetOwn, ownName(param.name));
             emit(Op::Pop);
         }
 
@@ -5633,7 +5700,7 @@ private:
             else if (value != nullptr) compileExprFor(*value, resolveType(field->type));
             else emit(Op::Null);
             line_ = field->line;
-            emit(Op::SetOwn, stringConstant(storedName(*field)));
+            emit(Op::SetOwn, ownName(storedName(*field)));
             emit(Op::Pop);
         }
         blocksBefore(s.fields.size());
@@ -5752,7 +5819,7 @@ private:
                 }
             }
             emit(Op::DeclareField);
-            emitU16(stringConstant(storedName(f)));
+            emitU16(ownName(storedName(f)));
             emitU16(flags | (f.isVal ? kFieldVal : 0) | (required ? kFieldRequired : 0) | (f.isOverride ? kFieldOverride : 0));
         }
 
@@ -5786,7 +5853,7 @@ private:
             else if (initialValues[i] != nullptr) compileExprFor(*initialValues[i], resolveType(f.type));
             else emit(Op::Null);
             line_ = f.line;
-            emit(Op::SetOwn, stringConstant(storedName(f)));
+            emit(Op::SetOwn, ownName(storedName(f)));
             emit(Op::Pop);
         }
         emit(Op::Null);
@@ -6241,7 +6308,7 @@ private:
         line_ = s.line;
         if (which == 0) {
             for (const ReflectedMember& m : r.fields) {
-                emit(Op::Const, stringConstant(m.name));
+                emit(Op::Const, metaName(m.name));
                 emitMetaType(m.type, s);
                 emit(Op::Const, intConstant(m.flags));
                 emitAnnotations(m.annotations);
@@ -6263,7 +6330,7 @@ private:
         } else {
             for (const ReflectedMember& m : r.methods) {
                 emit(Op::Const, stringConstant(m.name));
-                emit(Op::Const, stringConstant(formNameOf(s, *m.fn)));
+                emit(Op::Const, metaName(formNameOf(s, *m.fn)));
                 emitMetaParams(m, s);
                 emitMetaType(m.type, s);
                 emitAnnotations(m.annotations);
@@ -6353,6 +6420,11 @@ private:
     // made as reflection makes them. Then the same for the classes inside it.
     void emitFieldTypesMakers(const ClassStmt& s, const std::string& bound, bool anonymous = false) {
         if (s.isExternal || session_.checker == nullptr) return;
+        ClassState described{nullptr};
+        described.qualified = bound;
+        notePrivates(described, s, fileKey_);
+        const ClassState* const savedNames = std::exchange(metaNames_, &described);
+        struct Restore { const ClassState*& to; const ClassState* was; ~Restore() { to = was; } } restore{metaNames_, savedNames};
         // The fields that keep the type of a value whose phantom type parameters their declared
         // type says too little of (`var id : Id<any>`), in a slot beside it.
         const std::vector<std::string> slotted = session_.checker->typeSlottedFields(s);
@@ -6362,6 +6434,8 @@ private:
                 std::string stored = name;
                 for (const auto& field : s.fields)
                     if (field->name == name) stored = storedName(*field);
+                // A private one by its private name: \x02, its owner, a tab and its text (VM, TypeSlots).
+                if (auto it = metaNames_->privates.find(stored); it != metaNames_->privates.end()) stored = "\x02" + it->second + "\t" + stored;
                 names += stored + "\n";
             }
             line_ = s.line;
@@ -6393,7 +6467,7 @@ private:
                 fs_ = &state;
                 for (const ReflectedMember* field : typed) {
                     line_ = s.line;
-                    emit(Op::Const, stringConstant(field->name));
+                    emit(Op::Const, metaName(field->name));
                     emitMetaType(field->type, s);
                 }
                 emitBuildList(2 * typed.size(), s);
@@ -6419,6 +6493,11 @@ private:
     // inside it.
     void emitClassMetas(const ClassStmt& s, const std::string& bound, int key, bool anonymous = false) {
         if (s.isExternal || session_.checker == nullptr) return;
+        ClassState names{nullptr};
+        names.qualified = bound;
+        notePrivates(names, s, fileKey_);
+        const ClassState* const savedNames = std::exchange(metaNames_, &names);
+        struct Restore { const ClassState*& to; const ClassState* was; ~Restore() { to = was; } } restore{metaNames_, savedNames};
         ReflectedClass r;
         if (session_.checker->reflected(s, r)) {
             // A class no global holds: its descriptions noted with the classes it is below, so
@@ -6477,7 +6556,7 @@ private:
                 if (upvalue == -1 && classSide() == ClassSide::Instance && class_->members.count(n.name) != 0 && directThis()) {
                     // A field of what the method runs on.
                     emitThisValue();
-                    emit(class_->isValue ? Op::GetOwn : Op::PlaceField, stringConstant(n.name));
+                    emit(class_->isValue ? Op::GetOwn : Op::PlaceField, ownName(n.name));
                     return;
                 }
                 if (upvalue == -1 && classSide() == ClassSide::None) {
@@ -6509,7 +6588,7 @@ private:
                 } else {
                     compileExpr(*member.object);
                     line_ = e.line;
-                    emit(Op::PlaceField, stringConstant(member.name));
+                    emit(Op::PlaceField, memberName(*member.object, member.name));
                 }
                 return;
             }
@@ -6885,7 +6964,7 @@ private:
                 requireSuper(e);
                 emitGet("this", e);
                 emitGet("super", e);
-                emit(Op::GetSuper, stringConstant(e.method));
+                emit(Op::GetSuper, ownName(e.method));
                 break;
             }
 
@@ -7045,7 +7124,7 @@ private:
                     argc = static_cast<int>(order->size());
                     emitCallPrelude(e, argc + 1);
                     line_ = member.line;
-                    emit(ownMember(*member.object, member.name) ? Op::InvokeOwn : Op::Invoke, stringConstant(calledName(e, member.name)));
+                    emit(ownMember(*member.object, member.name) ? Op::InvokeOwn : Op::Invoke, memberName(*member.object, calledName(e, member.name)));
                     emitByte(argc);
                     emitExternalResult(e);
                     if (toEnd >= 0) patchJump(toEnd);
@@ -7069,9 +7148,9 @@ private:
                     emitCallPrelude(e, argc + 1);
                     line_ = member.line;
                     if (ownMember(*member.object, member.name))
-                        emit(trailing ? Op::InvokeOwnTrailing : Op::InvokeOwn, stringConstant(calledName(e, member.name)));
+                        emit(trailing ? Op::InvokeOwnTrailing : Op::InvokeOwn, memberName(*member.object, calledName(e, member.name)));
                     else
-                        emit(trailing ? Op::InvokeTrailing : Op::Invoke, stringConstant(calledName(e, member.name)));
+                        emit(trailing ? Op::InvokeTrailing : Op::Invoke, memberName(*member.object, calledName(e, member.name)));
                     emitByte(argc);
                     emitExternalResult(e);
                     if (toEnd >= 0) patchJump(toEnd);
@@ -7085,7 +7164,7 @@ private:
                     emitGet("super", sup);
                     emitCallPrelude(e, argc + 2);
                     line_ = sup.line;
-                    emit(e.trailingLambda ? Op::SuperInvokeTrailing : Op::SuperInvoke, stringConstant(calledName(e, sup.method)));
+                    emit(e.trailingLambda ? Op::SuperInvokeTrailing : Op::SuperInvoke, ownName(calledName(e, sup.method)));
                     emitByte(argc);
                     emitExternalResult(e);
                 } else {
@@ -7123,7 +7202,7 @@ private:
                 } else {
                     const bool own = ownMember(*e.object, e.name);
                     const bool inPlace = session_.checker != nullptr && !copyReadsHere() && session_.checker->readsFieldInPlace(e);
-                    emit(inPlace ? (own ? Op::GetOwnRef : Op::GetPropRef) : (own ? Op::GetOwn : Op::GetProp), stringConstant(e.name));
+                    emit(inPlace ? (own ? Op::GetOwnRef : Op::GetPropRef) : (own ? Op::GetOwn : Op::GetProp), memberName(*e.object, e.name));
                 }
                 if (toEnd >= 0) patchJump(toEnd);
                 break;
@@ -7670,7 +7749,7 @@ private:
             compileArgs(e.args);
             emitCallPrelude(e, argc + 1);
             line_ = e.line;
-            emit(Op::InvokeOwn, stringConstant(calledName(e, name)));
+            emit(Op::InvokeOwn, ownName(calledName(e, name)));
             emitByte(argc);
             emitExternalResult(e);
             return true;
@@ -7712,13 +7791,13 @@ private:
             compileExpr(*member.object);
             line_ = member.line;
             toEnd = emitJump(Op::JumpIfNull);
-            emit(Op::GetProp, stringConstant(calledName(e, member.name)));
+            emit(Op::GetProp, memberName(*member.object, calledName(e, member.name)));
         } else if (e.callee->kind == ExprKind::Member && calledName(e, static_cast<const MemberExpr&>(*e.callee).name) !=
                                                              static_cast<const MemberExpr&>(*e.callee).name) {
             const auto& member = static_cast<const MemberExpr&>(*e.callee);
             compileExpr(*member.object);
             line_ = member.line;
-            emit(Op::GetProp, stringConstant(calledName(e, member.name)));
+            emit(Op::GetProp, memberName(*member.object, calledName(e, member.name)));
         } else {
             compileCallee(e);
         }
@@ -7888,11 +7967,11 @@ private:
                     // A field of the object the code runs on: `this` under it, nothing swapped round.
                     emitThisValue();
                     emit(Op::Dup);
-                    emit(Op::GetOwn, stringConstant(target.name));
+                    emit(Op::GetOwn, ownName(target.name));
                     emit(Op::Const, intConstant(1));
                     line_ = e.line;
                     emit(change);
-                    emit(Op::SetOwn, stringConstant(target.name));
+                    emit(Op::SetOwn, ownName(target.name));
                     break;
                 }
                 emitGet(target.name, target);
@@ -7912,11 +7991,11 @@ private:
                 int toEnd = target.safe ? emitJump(Op::JumpIfNull) : -1;
                 emit(Op::Dup);
                 line_ = e.line;
-                emit(ownMember(*target.object, target.name) ? Op::GetOwn : Op::GetProp, stringConstant(target.name));
+                emit(ownMember(*target.object, target.name) ? Op::GetOwn : Op::GetProp, memberName(*target.object, target.name));
                 const int skip = beginNullSafe(e.nullSafe);
                 emit(Op::Const, intConstant(1));
                 emit(change);
-                emit(ownMember(*target.object, target.name) ? Op::SetOwn : Op::SetProp, stringConstant(target.name));
+                emit(ownMember(*target.object, target.name) ? Op::SetOwn : Op::SetProp, memberName(*target.object, target.name));
                 endNullSafe(skip, 1);
                 if (toEnd >= 0) patchJump(toEnd);
                 break;
@@ -8069,7 +8148,7 @@ private:
                     // `bounds = Rect(...)` in a method: the field, inside the object, is where the
                     // result goes (M6.6 part 5).
                     emit(Op::GetLocal, 0);
-                    emit(Op::FieldDestination, stringConstant(target.name));
+                    emit(Op::FieldDestination, ownName(target.name));
                     compileWhereItGoes(e);
                     emitSet(target.name, target);
                     break;
@@ -8080,7 +8159,7 @@ private:
                     emitThisValue();
                     if (compound) {
                         emit(Op::Dup);
-                        emit(Op::GetOwn, stringConstant(target.name));
+                        emit(Op::GetOwn, ownName(target.name));
                         compileExpr(*e.value);
                         line_ = e.line;
                         emit(typedOp(binaryOp(e.op), e));
@@ -8088,7 +8167,7 @@ private:
                         compileExprFor(*e.value, declaredTypeOf(target.name));
                         line_ = e.line;
                     }
-                    emit(Op::SetOwn, stringConstant(target.name));
+                    emit(Op::SetOwn, ownName(target.name));
                     break;
                 }
                 if (compound) emitGet(target.name, target);
@@ -8136,22 +8215,22 @@ private:
                     // `comp.bounds = Rect(...)`: the field, inside the object, is where the result
                     // goes (M6.6 part 5).
                     emit(Op::Dup);
-                    emit(Op::FieldDestination, stringConstant(target.name));
+                    emit(Op::FieldDestination, memberName(*target.object, target.name));
                     compileWhereItGoes(e);
-                    emit(own ? Op::SetOwn : Op::SetProp, stringConstant(target.name));
+                    emit(own ? Op::SetOwn : Op::SetProp, memberName(*target.object, target.name));
                     if (toEnd >= 0) patchJump(toEnd);
                     break;
                 }
                 if (compound) {
                     emit(Op::Dup);
-                    emit(own ? Op::GetOwn : Op::GetProp, stringConstant(target.name));
+                    emit(own ? Op::GetOwn : Op::GetProp, memberName(*target.object, target.name));
                 }
                 const int skip = beginNullSafe(compound && e.nullSafe);
                 if (compound) compileExpr(*e.value);
                 else compileExprFor(*e.value, declaredTypeOf(*e.target));
                 line_ = e.line;
                 if (compound && !dotEq) emit(typedOp(binaryOp(e.op), e));
-                emit(own ? Op::SetOwn : Op::SetProp, stringConstant(target.name));
+                emit(own ? Op::SetOwn : Op::SetProp, memberName(*target.object, target.name));
                 endNullSafe(skip, 1);
                 if (toEnd >= 0) patchJump(toEnd);
                 break;
@@ -8190,7 +8269,7 @@ private:
                 emitGet("super", target);
                 compileExpr(*e.value);
                 line_ = e.line;
-                emit(Op::SetSuper, stringConstant(target.method));
+                emit(Op::SetSuper, ownName(target.method));
                 break;
             }
 

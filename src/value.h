@@ -381,7 +381,8 @@ struct ObjString final : Obj {
 
     // Some class has a member of this name that not all code may use (1), or may assign to
     // (2); and some class has one that is private (4). Set and never cleared: a member of
-    // any other name is reached without a look at who may use it.
+    // any other name is reached without a look at who may use it. 8: the name is a class's
+    // private name (VM::privateName), not the interned one of its text.
     uint8_t restricted = 0;
 
     const uint8_t width;  // 1, 2 or 4 bytes a character
@@ -1435,8 +1436,28 @@ struct ObjInstance final : Obj {
 
     // The field's value, however it is kept; false if the object has no such field or it has
     // no value yet.
-    bool read(const ObjString* name, Value& out) const {
-        const FieldDecl* d = declOf(name);
+    bool read(const ObjString* name, Value& out) const { return readDecl(declOf(name), out); }
+
+    // For C++ that names a field by its text: the field of that text, a class's private one too
+    // (o-private-shadow), which the program's own code reaches by its private name alone.
+    const FieldDecl* declByText(const ObjString* name) const {
+        if (const FieldDecl* d = declOf(name)) return d;
+        if ((name->restricted & 16) == 0) return nullptr;
+        for (uint32_t at = 0; at < cls->declaredIndex.capacity(); at++) {
+            const ObjString* key = cls->declaredIndex.entries()[at].key;
+            if (key != nullptr && (key->restricted & 8) != 0 && sameText(key, name)) return declOf(key);
+        }
+        return nullptr;
+    }
+    bool readText(const ObjString* name, Value& out) const { return readDecl(declByText(name), out); }
+    bool setFieldText(const ObjString* name, Value value) { return setDecl(declByText(name), value); }
+    const Value* fieldText(const ObjString* name) const {
+        const FieldDecl* d = declByText(name);
+        if (d == nullptr || d->payload != FieldDecl::NoPayload || fields()[d->slot].kind == ValueKind::Undefined) return nullptr;
+        return fields() + d->slot;
+    }
+
+    bool readDecl(const FieldDecl* d, Value& out) const {
         if (d == nullptr) return false;
         if (d->payload != FieldDecl::NoPayload) {
             out = payloadOf(*d);  // 0, 0.0 or false until it is given a value
@@ -1455,8 +1476,8 @@ struct ObjInstance final : Obj {
     }
     // Gives the field a value, of its kind where it is a payload; false if the object has no
     // field of that name.
-    bool setField(const ObjString* name, Value value) {
-        const FieldDecl* d = declOf(name);
+    bool setField(const ObjString* name, Value value) { return setDecl(declOf(name), value); }
+    bool setDecl(const FieldDecl* d, Value value) {
         if (d == nullptr) return false;
         if (d->payload != FieldDecl::NoPayload) setPayload(*d, value);
         else fields()[d->slot] = value;

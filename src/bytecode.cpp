@@ -1611,10 +1611,10 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 33;  // 33: JumpIfNotClass (2026-11-13)
+const uint8_t kFormatVersion = 34;  // 34: private names (2026-11-20); 33: JumpIfNotClass (2026-11-13)
 const int kMaxProtoNesting = 200;
 
-enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
+enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4, TagPrivateName = 5 };
 
 struct Writer {
     std::ostream& out;
@@ -1758,6 +1758,10 @@ struct Writer {
             } else if (c.isChar() || c.isByte()) {
                 u8(c.isChar() ? TagChar : TagByte);
                 u64(static_cast<uint64_t>(c.as.i));
+            } else if (const std::string* owner = VM::privateOwner(asString(c))) {
+                u8(TagPrivateName);  // a class's private name (o-private-shadow): its owner and text
+                str(*owner);
+                str(asString(c)->utf8());
             } else {
                 u8(TagString);
                 str(asString(c)->utf8());
@@ -1997,6 +2001,11 @@ struct Reader {
                 case TagString:
                     f->constants.push_back(Value::object(vm.intern(view())));
                     break;
+                case TagPrivateName: {
+                    const std::string owner(view());
+                    f->constants.push_back(Value::object(vm.privateName(owner, view())));
+                    break;
+                }
                 case TagChar: {
                     const uint64_t c = u64();
                     if (!isCharacter(static_cast<int64_t>(c))) corrupt();
