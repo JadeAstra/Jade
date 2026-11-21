@@ -1233,7 +1233,7 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
                             const std::vector<std::string>& membersByName);
 
 // Whether any code of the program names one of these globals.
-bool namesGlobal(const Program& program, const std::vector<std::string>& names);
+bool namesGlobal(const Program& program, const std::vector<std::string>& names, bool outsideStd = false);
 
 // The name of the member the instruction at `at` uses (GetProp, Invoke and the like), with
 // the signature of a form after it; null for an instruction that uses none.

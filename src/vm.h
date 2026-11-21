@@ -1025,6 +1025,9 @@ public:
     std::ostream* errorOutput;  // printError's, and Program.errors'
     std::istream* input;
     std::vector<std::string> scriptArgs;
+    // The compiler session the program was compiled by, kept for Compiler.compile (null where
+    // the program was read from a bytecode file or built into an executable).
+    void* liveSession = nullptr;
     int mainModule_ = -1;  // the program's own file's module (Program.name)
     // That file's name without its folder and .ww: "bank" for bank.ww; "program" if none.
     std::string mainFileName() const;

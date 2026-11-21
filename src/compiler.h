@@ -143,6 +143,8 @@ public:
 
     // Compiles a file and everything it imports. Returns the entry module index.
     int compileFile(const std::string& path);
+    // The file compileFile compiled, as its key (its whole path), or empty.
+    const std::string& mainFile() const { return mainKey_; }
 
     // For `ww test` (D153): a compiled file's statements, and the global a name at its top
     // level is kept in; null and -1 where there is none.

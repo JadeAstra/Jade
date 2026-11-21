@@ -1400,6 +1400,32 @@ void registerScriptsHere(VM& vm) {
         return Value::boolean(!host->ended);
     });
 
+    // __compileHere(source, name, directory), Program.compile's: source compiled into this
+    // program, in this VM, as one more file in `directory`, and run; what its last expression gives.
+    vm.defineGlobal("__compileHere", Value::object(vm.alloc<ObjNative>("__compileHere", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        const std::string source = vm.toStr(args[0], "the source");
+        const std::string name = vm.toStr(args[1], "its name");
+        std::string directory = vm.toStr(args[2], "its folder");
+        auto* session = static_cast<CompilerSession*>(vm.liveSession);
+        // A program read from a bytecode file, or built into an executable, has no compiler's
+        // view of itself: a bytecode file does not say where its source is.
+        if (session == nullptr)
+            throw vm.runtimeError(Thrown::IllegalStateException,
+                                  "Compiler.compile works only in a program run from its source (ww program.ww), not one read from bytecode or built");
+        // By default the folder of the program's own file: the names of that folder's files (the
+        // program's main file among them) are its own, as for another file there.
+        if (directory.empty()) directory = std::filesystem::path(session->mainFile()).parent_path().string();
+        if (directory.empty()) directory = ".";
+        int module = -1;
+        try {
+            module = session->compileSource(source, name, directory, true);
+        } catch (const CompileError& e) {
+            throw vm.runtimeError(Thrown::IllegalArgumentException, e.format());
+        }
+        vm.load(session->program);
+        return vm.runModule(module);
+    })));
+
     vm.defineGlobal("__script", Value::object(script));
 }
 

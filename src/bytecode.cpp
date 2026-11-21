@@ -2748,14 +2748,17 @@ const std::string* memberNameAt(const FunctionProto& f, size_t at) {
     return &asString(f.constants[static_cast<size_t>(a)])->utf8();
 }
 
-bool namesGlobal(const Program& program, const std::vector<std::string>& names) {
+// With outsideStd, only the program's own modules are looked at, not the standard library's.
+bool namesGlobal(const Program& program, const std::vector<std::string>& names, bool outsideStd) {
     std::vector<char> wanted(program.globalNames.size(), 0);
     bool any = false;
     for (size_t slot = 0; slot < program.globalNames.size(); slot++)
         for (const std::string& name : names)
             if (program.globalNames[slot] == name) wanted[slot] = any = 1;
     if (!any) return false;
-    std::vector<const FunctionProto*> work(program.modules.begin(), program.modules.end());
+    std::vector<const FunctionProto*> work;
+    for (const FunctionProto* m : program.modules)
+        if (!outsideStd || (m != nullptr && m->source != "<std>")) work.push_back(m);
     while (!work.empty()) {
         const FunctionProto* f = work.back();
         work.pop_back();
