@@ -1466,6 +1466,7 @@ int testFilesCommand(const std::vector<std::string>& given) {
             continue;
         }
         vm.load(session.program);
+        vm.liveSession = &session;  // Compiler.compile, as in a run from source
         // A worker a test starts loads its own copy of the program from these bytes, as in a run.
         Program& program = session.program;
         vm.programImage = [&program] {
