@@ -642,9 +642,9 @@ class Suite(val options : Options) {
     program.mkdir()
     // Every test that compiles (not those that test an error of the compiler's) and every
     // example, each with what it imports from beside it: a folder of the tests', or another example.
-    // Not those that run from source only: a program naming Compiler is never kept, so it would
-    // time the second run without the kept program.
-    val sources : open List<FilePath> = wwFiles(t).filter { !it.name.startsWith("error_") and !it.readText().contains("// expect compile error") and !it.readText().contains("// from source only") }.toOpenList()
+    // Not those that compile code into themselves (Compiler.compile): such a program is never kept,
+    // so it would time the second run without the kept program.
+    val sources : open List<FilePath> = wwFiles(t).filter { !it.name.startsWith("error_") and !it.readText().contains("// expect compile error") and !it.readText().contains("Compiler.compile") }.toOpenList()
     val examples = wwFiles(FilePath(t, "../examples"))
     sources.addAll(examples.filter { !it.name.startsWith("bounce_worker") })
     val folders = t.list().filter { it.isDirectory() and it.name !in ["check", "testing", "shell", "runner"] }

@@ -893,11 +893,19 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     }
     showTimes("compiled");
 
-    // What the program can never reach is left out of it (M6.5 part 5).
-    const LeftOut leftOut = leaveOutUnreachable(session.program, VM::globalsFoundByName(), vm.membersFoundByName());
-    if (std::getenv("WW_TIMES") != nullptr)
-        std::cerr << "ww: left out " << leftOut.declarations << " declarations; the modules' own code "
-                  << leftOut.codeBefore << " bytes, now " << leftOut.codeAfter << "\n";
+    // A program that compiles code into itself as it runs (Compiler.compile) carries what it was
+    // compiled from, for the compiler's view of it to be made again, and keeps all of itself:
+    // that code may name anything.
+    const bool compilesItself = namesGlobal(session.program, {"Compiler"}, true);
+    if (compilesItself) {
+        session.keepSourcesIn(session.program);
+    } else {
+        // What the program can never reach is left out of it (M6.5 part 5).
+        const LeftOut leftOut = leaveOutUnreachable(session.program, VM::globalsFoundByName(), vm.membersFoundByName());
+        if (std::getenv("WW_TIMES") != nullptr)
+            std::cerr << "ww: left out " << leftOut.declarations << " declarations; the modules' own code "
+                      << leftOut.codeBefore << " bytes, now " << leftOut.codeAfter << "\n";
+    }
 
     if (!asExecutable) {
         std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
@@ -927,7 +935,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     // names them (M6.5 part 5, D161). A program that compiles scripts as it runs (Script) keeps
     // all of it, and the compiled standard library its scripts are compiled against (the
     // scripting plan, part 1): a script may use anything.
-    const bool scripts = namesGlobal(session.program, {"__script"}) || namesGlobal(session.program, {"Compiler"}, true);
+    const bool scripts = namesGlobal(session.program, {"__script"}) || compilesItself;
     if (!scripts) stripPrelude(image);  // the program carries its own compiled copy of what it uses
     std::vector<std::string> unneeded;
     if (!scripts) unneeded = {".wwc", ".wws"};

@@ -1152,6 +1152,19 @@ public:
     int entry = 0;
 
     FunctionProto* newProto();
+
+    // For Compiler.compile in a program read from a bytecode file or built (a program that names
+    // Compiler): what it was compiled from, so that the compiler's view of it can be made again.
+    // Every file read but the standard library's, by its key (its whole path) and its text as
+    // read; its main file's key; the library folders its imports were looked for in. Empty in
+    // any other program.
+    struct Source {
+        std::string key, text;
+    };
+    std::vector<Source> compiledFrom;
+    std::string compiledMain;
+    std::vector<std::string> compiledLibraries;
+
     // Every function's run code made that is not made yet: before a parallel section, whose
     // cores share the functions and must not make one's run code while another runs it.
     void translateAll();

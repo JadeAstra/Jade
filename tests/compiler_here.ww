@@ -1,7 +1,7 @@
 // Code compiled into the program as it runs (Compiler.compile, asked 2026-11-21): in this VM,
 // with the program's own classes and objects, not copies; the names of the program's folder its
 // own; what its last expression gives; errors as an IllegalArgumentException; from another thread.
-// from source only: a bytecode file or a built program has no compiler's view of itself
+// Run from bytecode or built, the program is compiled again from the sources it carries.
 import compiler.shapes.*
 
 class Doubler(val by : int)

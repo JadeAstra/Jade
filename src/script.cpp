@@ -1169,6 +1169,34 @@ Limits limitsOf(VM& vm, Value v) {
 
 }  // namespace
 
+// The compiler's view of a program read from a bytecode file or built, made again for its first
+// Compiler.compile from the sources it carries (Program::compiledFrom, kept by `ww build`): it
+// is compiled again as it was, and must come out as the program running, global for global and
+// module for module, so that the code compiled into it finds the program's own classes and
+// objects. The VM then runs that program, the same code, and keeps the session.
+static CompilerSession* compileProgramAgain(VM& vm) {
+    const Program* running = vm.currentProgram();
+    if (running == nullptr || running->compiledFrom.empty() || running->compiledMain.empty())
+        throw vm.runtimeError(Thrown::IllegalStateException,
+                              "Compiler.compile: this program does not carry the sources it was compiled from (bytecode "
+                              "made by `ww build` carries them where the program names Compiler)");
+    auto session = std::make_shared<CompilerSession>(vm);
+    try {
+        session->compileAgain(*running);
+    } catch (const CompileError& e) {
+        throw vm.runtimeError(Thrown::IllegalStateException,
+                              "Compiler.compile: the program could not be compiled again from the sources it carries: " + e.format());
+    }
+    const Program& again = session->program;
+    if (again.globalNames != running->globalNames || again.modules.size() != running->modules.size())
+        throw vm.runtimeError(Thrown::IllegalStateException,
+                              "Compiler.compile: the program compiled again from the sources it carries is not the one running "
+                              "(was it built by another version of ww?)");
+    vm.ownedSession = session;
+    vm.liveSession = session.get();
+    return session.get();
+}
+
 void registerScriptsHere(VM& vm) {
     ObjClass* script = vm.alloc<ObjClass>(vm.intern("script"));
     auto def = [&](const char* name, int minArgs, int maxArgs, NativeFn fn) {
@@ -1407,11 +1435,7 @@ void registerScriptsHere(VM& vm) {
         const std::string name = vm.toStr(args[1], "its name");
         std::string directory = vm.toStr(args[2], "its folder");
         auto* session = static_cast<CompilerSession*>(vm.liveSession);
-        // A program read from a bytecode file, or built into an executable, has no compiler's
-        // view of itself: a bytecode file does not say where its source is.
-        if (session == nullptr)
-            throw vm.runtimeError(Thrown::IllegalStateException,
-                                  "Compiler.compile works only in a program run from its source (ww program.ww), not one read from bytecode or built");
+        if (session == nullptr) session = compileProgramAgain(vm);
         // By default the folder of the program's own file: the names of that folder's files (the
         // program's main file among them) are its own, as for another file there.
         if (directory.empty()) directory = std::filesystem::path(session->mainFile()).parent_path().string();
